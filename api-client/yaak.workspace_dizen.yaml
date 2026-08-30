@@ -1,0 +1,24 @@
+# Yaak workspace, synchronized by Directory Sync (03 section 8.1).
+#
+# One file per resource, named yaak.${MODEL_ID}.yaml, so two people can add different
+# requests on the same branch without a merge conflict in one giant JSON.
+#
+# Bidirectional: what changes in the app lands here silently, and what changes here -- after
+# a git pull, say -- the app detects and asks before applying.
+yaak:
+  schema: 3
+  type: workspace
+id: wk_dizen
+model: workspace
+name: Dizen
+description: |
+  Versioned API collection for dizen-v2-backend.
+
+  A new endpoint is not finished until it has its request here, the same way it is not
+  finished without a test (03 section 8.2, rule 1).
+
+  Secrets are never committed: the versioned environments carry URLs and variable names with
+  empty values, and nothing is marked as sharable.
+settingSyncDir: .
+settingValidateCertificates: true
+settingFollowRedirects: true

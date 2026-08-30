@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package dizen.identity.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+// Reference service for PRD-00 (RF-19): a single RPC that exercises the service template
+// end to end -- gRPC, REST gateway, interceptors, config and observability -- without
+// dragging in any domain logic. Real authentication arrives with PRD-01.
+service HealthService {
+  // Returns the identity of the running build. This is a public method: it belongs to the
+  // auth interceptor allowlist (03 section 7).
+  rpc HealthPing(HealthPingRequest) returns (HealthPingResponse) {
+    option (google.api.http) = {get: "/v1/identity/health"};
+  }
+}
+
+message HealthPingRequest {}
+
+message HealthPingResponse {
+  // Name of the service answering the call.
+  string service = 1;
+
+  // Build version (git tag, or "dev").
+  string version = 2;
+
+  // Commit the binary was built from.
+  string commit = 3;
+
+  // Server time, in UTC.
+  google.protobuf.Timestamp server_time = 4;
+}

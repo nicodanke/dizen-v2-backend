@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+# Generated code: it is versioned (hard rule 3) but kept out of pull request diffs.
+pkg/genproto/**           linguist-generated=true
+gen/dart/dizen_api/lib/** linguist-generated=true
+gen/openapi/**            linguist-generated=true
+**/internal/db/sqlc/**    linguist-generated=true
+**/mocks/**               linguist-generated=true
+*.pb.go                   linguist-generated=true
+*.pb.gw.go                linguist-generated=true
+
+*.sql   text
+*.proto text
+*.go    text

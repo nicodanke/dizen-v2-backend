@@ -1,0 +1,49 @@
+version: v2
+
+# `clean` wipes the output directories before generating, so a message or a file removed
+# from the contract does not survive as orphaned generated code.
+clean: true
+
+managed:
+  enabled: true
+  override:
+    # All generated Go code hangs off the `pkg` module, which is what consumes it.
+    - file_option: go_package_prefix
+      value: github.com/nicodanke/dizen-v2-backend/pkg/genproto
+  disable:
+    # External dependencies already ship a published go_package; do not rewrite it.
+    - file_option: go_package_prefix
+      module: buf.build/googleapis/googleapis
+    - file_option: go_package_prefix
+      module: buf.build/bufbuild/protovalidate
+
+plugins:
+  # --- Go: direct internal consumption, nothing published (01 section 3.1) ---
+  - local: protoc-gen-go
+    out: ../pkg/genproto
+    opt: paths=source_relative
+
+  - local: protoc-gen-go-grpc
+    out: ../pkg/genproto
+    opt:
+      - paths=source_relative
+      - require_unimplemented_servers=true
+
+  # --- grpc-gateway: the REST surface consumed by dizen-v2-web ---
+  - local: protoc-gen-grpc-gateway
+    out: ../pkg/genproto
+    opt:
+      - paths=source_relative
+      - generate_unbound_methods=false
+
+  # OpenAPI is generated separately, one file per service, via buf.gen.openapi.yaml:
+  # gnostic can only emit one file per .proto or a single file for everything, and neither
+  # gives the per-service contract that dizen-v2-web consumes.
+
+  # --- Dart: the pinned package consumed by dizen-v2-mobile ---
+  # include_imports because the generated Dart code imports the .pb.dart files of
+  # google/api and google/protobuf, which are not published on pub.dev.
+  - local: protoc-gen-dart
+    out: ../gen/dart/dizen_api/lib/src/generated
+    opt: grpc
+    include_imports: true

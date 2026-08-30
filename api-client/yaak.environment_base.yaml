@@ -1,0 +1,52 @@
+# Base environment: the variable names every environment defines.
+#
+# Values live in each environment, not here. The split that matters is not "values yes or no"
+# but which values are safe to commit:
+#
+#   - Endpoint URLs are configuration, not secrets. In `local` they are constants of the
+#     compose file, identical for everyone, so they are versioned filled in.
+#   - Tokens are filled in at run time by the sign-in request (03 section 8.2, rule 4) and
+#     are never committed, in any environment.
+yaak:
+  schema: 3
+  type: environment
+id: env_base
+model: environment
+workspaceId: wk_dizen
+name: Base
+base: true
+variables:
+  - name: identity_http
+    value: ""
+    enabled: true
+  - name: identity_grpc
+    value: ""
+    enabled: true
+  - name: tours_http
+    value: ""
+    enabled: true
+  - name: tours_grpc
+    value: ""
+    enabled: true
+  - name: booking_http
+    value: ""
+    enabled: true
+  - name: booking_grpc
+    value: ""
+    enabled: true
+  - name: admin_http
+    value: ""
+    enabled: true
+  - name: admin_grpc
+    value: ""
+    enabled: true
+  - name: api_version
+    value: ""
+    enabled: true
+  # Filled in by the sign-in request, never by hand and never committed.
+  - name: access_token
+    value: ""
+    enabled: true
+  - name: refresh_token
+    value: ""
+    enabled: true

@@ -1,0 +1,13 @@
+.git
+.github
+bin/
+dist/
+tmp/
+coverage*.out
+**/.env
+**/.env.*
+!**/.env.example
+gen/dart
+deploy/observability
+*.md
+!README.md

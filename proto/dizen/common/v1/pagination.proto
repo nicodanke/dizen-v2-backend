@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package dizen.common.v1;
+
+import "buf/validate/validate.proto";
+
+// Cursor-based pagination (03 section 1). The token is opaque to the client: it is sent
+// back exactly as it arrived in next_page_token, without being interpreted.
+message PageRequest {
+  // Number of items requested. 0 uses the service default.
+  int32 page_size = 1 [(buf.validate.field).int32 = {
+    gte: 0
+    lte: 200
+  }];
+
+  // Cursor returned by the previous call. Empty requests the first page.
+  string page_token = 2 [(buf.validate.field).string.max_len = 512];
+}
+
+// Pagination metadata returned by every list response.
+message PageResponse {
+  // Cursor for the next page. Empty means there are no more results.
+  string next_page_token = 1;
+
+  // Total number of items matching the filter. Only populated when it is cheap to
+  // compute (03 section 1); otherwise it stays 0.
+  int32 total_size = 2;
+}

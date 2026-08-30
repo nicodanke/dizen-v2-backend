@@ -1,0 +1,15 @@
+# Dashboards are versioned in the repository (01 section 7) rather than living only in the
+# Grafana database, where they would be lost with the volume.
+apiVersion: 1
+
+providers:
+  - name: dizen
+    orgId: 1
+    folder: Dizen
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

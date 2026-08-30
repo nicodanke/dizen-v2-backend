@@ -1,0 +1,4 @@
+# Everything under lib/src/generated is generated code: it is not linted.
+analyzer:
+  exclude:
+    - lib/src/generated/**

@@ -1,0 +1,30 @@
+version: v2
+
+# Template dedicated to the REST contract (decision D-4: OpenAPI v3 through gnostic, not
+# the Swagger 2.0 that protoc-gen-openapiv2 emits). scripts/gen-openapi.sh invokes it once
+# per service, narrowing the input with --path, to produce gen/openapi/<service>.yaml.
+#
+# `clean` is deliberately off: each run writes a single service and must not delete the
+# contracts of the others.
+clean: false
+
+# gnostic requires a go_package to resolve schema names; the managed mode of buf.gen.yaml
+# is replicated here so it does not have to be declared by hand in every .proto.
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/nicodanke/dizen-v2-backend/pkg/genproto
+  disable:
+    - file_option: go_package_prefix
+      module: buf.build/googleapis/googleapis
+    - file_option: go_package_prefix
+      module: buf.build/bufbuild/protovalidate
+
+plugins:
+  - local: protoc-gen-openapi
+    out: ../gen/openapi
+    opt:
+      - version=1.0.0
+      - default_response=false
+      - fq_schema_naming=true

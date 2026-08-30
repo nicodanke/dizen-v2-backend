@@ -1,0 +1,9 @@
+# One folder per service (03 section 8.2, rule 3). Inside, the requests are named after the
+# RPC they exercise.
+yaak:
+  schema: 3
+  type: folder
+id: fl_identity
+model: folder
+workspaceId: wk_dizen
+name: identity

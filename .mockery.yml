@@ -1,0 +1,23 @@
+# mockery v3 configuration (RF-18).
+#
+# Mocks are generated over the repository interfaces, which is the boundary the service layer
+# depends on: a service test drives the mock, never a database.
+#
+# The key names are v3's, which differ from v2's: pkgname rather than outpkg, structname
+# rather than mockname, and the expecter API comes from the `testify` template rather than
+# from a with-expecter flag.
+all: false
+
+# Written next to the code they mock, in a mocks package, and committed like every other
+# generated artifact (hard rule 3).
+dir: "{{.InterfaceDir}}/mocks"
+filename: "{{.InterfaceName}}.go"
+pkgname: mocks
+structname: "Mock{{.InterfaceName}}"
+template: testify
+formatter: goimports
+
+packages:
+  github.com/nicodanke/dizen-v2-backend/services/identity/internal/repository:
+    interfaces:
+      OutboxRepository:

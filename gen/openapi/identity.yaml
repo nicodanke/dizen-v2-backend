@@ -1,0 +1,47 @@
+# Generated with protoc-gen-openapi
+# https://github.com/google/gnostic/tree/master/cmd/protoc-gen-openapi
+
+openapi: 3.0.3
+info:
+    title: HealthService API
+    description: |-
+        Reference service for PRD-00 (RF-19): a single RPC that exercises the service template
+         end to end -- gRPC, REST gateway, interceptors, config and observability -- without
+         dragging in any domain logic. Real authentication arrives with PRD-01.
+    version: 1.0.0
+paths:
+    /v1/identity/health:
+        get:
+            tags:
+                - HealthService
+            description: |-
+                Returns the identity of the running build. This is a public method: it belongs to the
+                 auth interceptor allowlist (03 section 7).
+            operationId: HealthService_HealthPing
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/dizen.identity.v1.HealthPingResponse'
+components:
+    schemas:
+        dizen.identity.v1.HealthPingResponse:
+            type: object
+            properties:
+                service:
+                    type: string
+                    description: Name of the service answering the call.
+                version:
+                    type: string
+                    description: Build version (git tag, or "dev").
+                commit:
+                    type: string
+                    description: Commit the binary was built from.
+                serverTime:
+                    type: string
+                    description: Server time, in UTC.
+                    format: date-time
+tags:
+    - name: HealthService

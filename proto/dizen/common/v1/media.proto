@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package dizen.common.v1;
+
+// Reference to an image stored outside the database, in the S3-compatible bucket
+// (ADR A-5). The URL is signed and short-lived; the bucket is never public.
+message MediaRef {
+  string id = 1;
+
+  // Signed URL. It must not be cached beyond its expiry.
+  string url = 2;
+
+  int32 width = 3;
+  int32 height = 4;
+
+  // Low-resolution placeholder to paint while the image loads.
+  string blurhash = 5;
+
+  // Alternative text for accessibility.
+  string alt_text = 6;
+}

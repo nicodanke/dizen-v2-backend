@@ -1,0 +1,33 @@
+# Tool binaries installed by `make tools`
+/bin/
+
+# Compiled binaries
+/dist/
+*.exe
+*.test
+
+# Secrets: only .env.example is versioned
+.env
+.env.*
+!.env.example
+!*.env.example
+
+# Coverage
+coverage.out
+coverage.html
+coverage.filtered.out
+
+# Dart artifacts of the generated package
+gen/dart/dizen_api/.dart_tool/
+gen/dart/dizen_api/pubspec.lock
+gen/dart/dizen_api/.packages
+
+# Local tooling
+.air/
+tmp/
+.DS_Store
+
+# Editors
+.idea/
+*.swp
+deploy/.env

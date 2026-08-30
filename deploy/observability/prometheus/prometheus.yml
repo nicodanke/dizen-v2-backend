@@ -1,0 +1,32 @@
+# Prometheus scrape configuration for the local environment.
+#
+# Prometheus measures the system; Sentry captures errors and Statsig measures user
+# behaviour (01 section 7). Nothing here duplicates those.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: local
+
+scrape_configs:
+  - job_name: dizen-services
+    metrics_path: /metrics
+    static_configs:
+      # The operational port of each service, on the compose network.
+      - targets:
+          - identity:8080
+          - tours:8080
+          - booking:8080
+          - admin:8080
+          - mail-dispatcher:8080
+    relabel_configs:
+      # The service name becomes a label so one dashboard can break down by service.
+      - source_labels: [__address__]
+        regex: "([^:]+):.*"
+        target_label: service
+        replacement: "$1"
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]

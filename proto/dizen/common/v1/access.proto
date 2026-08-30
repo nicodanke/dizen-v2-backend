@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package dizen.common.v1;
+
+// How a piece of content is accessed. Values carry the enum prefix because in protobuf
+// enum values share the namespace of the package that contains them.
+enum AccessType {
+  ACCESS_TYPE_UNSPECIFIED = 0;
+  ACCESS_TYPE_FREE = 1;
+  ACCESS_TYPE_PREMIUM = 2;
+  ACCESS_TYPE_SUBSCRIPTION = 3;
+}

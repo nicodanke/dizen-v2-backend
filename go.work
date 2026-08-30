@@ -1,0 +1,13 @@
+go 1.27.0
+
+// The root module only hosts the pinned build tools (`tool` directives); it carries no
+// production code. The shared library and each service are modules of their own.
+use (
+	.
+	./pkg
+	./services/admin
+	./services/booking
+	./services/identity
+	./services/mail-dispatcher
+	./services/tours
+)

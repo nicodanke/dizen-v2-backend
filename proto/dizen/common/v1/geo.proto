@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package dizen.common.v1;
+
+import "buf/validate/validate.proto";
+
+// Geographic point in WGS-84 (EPSG:4326), the same reference system PostGIS uses in
+// tours_db.
+message GeoPoint {
+  // Latitude in decimal degrees.
+  double lat = 1 [(buf.validate.field).double = {
+    gte: -90.0
+    lte: 90.0
+  }];
+
+  // Longitude in decimal degrees.
+  double lng = 2 [(buf.validate.field).double = {
+    gte: -180.0
+    lte: 180.0
+  }];
+}

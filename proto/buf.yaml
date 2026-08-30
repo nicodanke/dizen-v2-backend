@@ -1,0 +1,26 @@
+version: v2
+
+# Single source of truth for the API contract (01 section 3.1). This module is not pushed
+# to the BSR: clients are consumed from this same repository, pinned to an api-vX.Y.Z tag
+# (decision D-15 in 05 section 5).
+modules:
+  - path: .
+
+deps:
+  - buf.build/googleapis/googleapis
+  - buf.build/bufbuild/protovalidate
+
+lint:
+  use:
+    - STANDARD
+  enum_zero_value_suffix: _UNSPECIFIED
+  rpc_allow_same_request_response: false
+  rpc_allow_google_protobuf_empty_requests: true
+  rpc_allow_google_protobuf_empty_responses: true
+  service_suffix: Service
+
+# Hard rule 4: changes are additive and a field number is never reused. FILE is the
+# strictest rule set; it blocks the merge from CI (01 section 3.2).
+breaking:
+  use:
+    - FILE

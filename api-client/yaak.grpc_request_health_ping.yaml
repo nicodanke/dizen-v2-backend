@@ -1,0 +1,29 @@
+# HealthPing over native gRPC, the transport the Flutter app uses (01 section 4.1).
+#
+# Reflection is enabled outside production, so Yaak can introspect the service without being
+# given a descriptor. In production it is off and this request needs the proto.
+yaak:
+  schema: 3
+  type: grpc_request
+id: gr_identity_health_ping
+model: grpc_request
+workspaceId: wk_dizen
+folderId: fl_identity
+name: HealthPing (gRPC)
+sortPriority: 1
+url: "${[ identity_grpc ]}"
+service: dizen.identity.v1.HealthService
+method: HealthPing
+message: "{}"
+metadata:
+  # The contract version the client declares. Below MIN_CLIENT_API_VERSION the server
+  # answers FAILED_PRECONDITION with reason CLIENT_TOO_OLD (RF-2c).
+  - name: x-api-version
+    value: "${[ api_version ]}"
+    enabled: true
+  - name: x-device-id
+    value: yaak-local
+    enabled: true
+  - name: x-platform
+    value: web
+    enabled: true

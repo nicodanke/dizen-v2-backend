@@ -1,0 +1,108 @@
+# golangci-lint v2 configuration. RNF-4: no warnings.
+version: "2"
+
+run:
+  timeout: 5m
+  # Integration tests live behind this build tag; they are linted too.
+  build-tags:
+    - integration
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - contextcheck      # deadline-carrying context propagated on every outbound call
+    - copyloopvar
+    - dupl
+    - err113
+    - errorlint
+    - exhaustive
+    - gocritic
+    - gocyclo
+    - goconst
+    - gosec
+    - intrange
+    - misspell          # hard rule 8: everything in this repository is written in English
+    - modernize         # same analyzer family as `go fix`; see `make fix`
+    - nakedret
+    - nilerr
+    - noctx
+    - nolintlint
+    - prealloc
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - unparam
+    - wastedassign
+    - whitespace
+
+  settings:
+    gocyclo:
+      min-complexity: 15
+    dupl:
+      threshold: 150
+    exhaustive:
+      default-signifies-exhaustive: true
+    modernize:
+      disable:
+        # embedlit rewrites a nested composite literal into promoted fields, which only
+        # compiles from Go 1.27. The toolchain here is 1.27, but every editor whose gopls
+        # is older reports the result as an error, so the whole team would see false
+        # failures for a rewrite that buys nothing. Revisit once gopls has caught up.
+        - embedlit
+    misspell:
+      locale: US
+    revive:
+      rules:
+        - name: exported
+          disabled: false
+    gosec:
+      excludes:
+        # G115: int -> int32 conversions in pagination and protobuf, bounded by validation.
+        - G115
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      # Generated code (hard rule 3): it is versioned, it is not linted.
+      - pkg/genproto
+      - gen/
+      - .*/internal/db/sqlc/.*
+      - .*/mocks/.*
+      - .*\.pb\.go$
+      - .*\.pb\.gw\.go$
+    rules:
+      # Tests legitimately carry duplication, dynamic errors and fixed data.
+      - path: _test\.go
+        linters:
+          - dupl
+          - err113
+          - gocyclo
+          - goconst
+          - gosec
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/nicodanke/dizen-v2-backend
+  exclusions:
+    generated: lax
+    paths:
+      - pkg/genproto
+      - gen/
+      - .*/internal/db/sqlc/.*
+      - .*/mocks/.*
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

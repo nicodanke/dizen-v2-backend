@@ -1,0 +1,22 @@
+# The same RPC over REST via grpc-gateway, the transport the dashboard uses (01 section 4.1).
+#
+# Having both in one collection is the reason Yaak was chosen: one contract, two surfaces,
+# one tool.
+yaak:
+  schema: 3
+  type: http_request
+id: hr_identity_health_ping
+model: http_request
+workspaceId: wk_dizen
+folderId: fl_identity
+name: HealthPing (REST)
+sortPriority: 2
+method: GET
+url: "${[ identity_http ]}/v1/identity/health"
+headers:
+  - name: Accept
+    value: application/json
+    enabled: true
+  - name: x-api-version
+    value: "${[ api_version ]}"
+    enabled: true

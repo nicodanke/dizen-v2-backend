@@ -1,0 +1,359 @@
+# Local development environment (RF-15).
+#
+# `make up` from the repository root brings this up. Everything binds to localhost so a
+# laptop on a shared network does not publish a database to it.
+#
+# One database container per service, no cross-access (hard rule 2). Five, not four: 02
+# documents five databases, including mail_db.
+
+name: dizen
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  networks: [dizen]
+  environment: &service-env
+    ENVIRONMENT: local
+    LOG_LEVEL: debug
+    HTTP_PORT: 8080
+    GRPC_PORT: 9090
+    REDIS_URL: redis://redis:6379/0
+    AMQP_URL: amqp://dizen:dizen@rabbitmq:5672/
+    AMQP_EXCHANGE: dizen.events
+    OTLP_ENDPOINT: jaeger:4317
+    TRACE_SAMPLE_RATIO: "1.0"
+    DATABASE_RUN_MIGRATIONS: "true"
+    JWT_ISSUER: dizen
+    JWT_AUDIENCE: dizen-app
+  env_file:
+    # Optional local overrides, git-ignored (hard rule 6). `make jwt-key` writes the
+    # development signing key here; without it the JWKS is simply empty, which is correct
+    # until PRD-01 starts issuing tokens.
+    - path: .env
+      required: false
+  volumes:
+    # The whole repository is mounted, not just the service: Air watches pkg/ as well, so
+    # a change to the shared library reloads every service.
+    - ../:/src:cached
+    - go-mod-cache:/go/pkg/mod
+  depends_on:
+    redis:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+
+# Postgres 18 changed where the data lives: the mount goes at /var/lib/postgresql, and the
+# image places the cluster in a major-version subdirectory underneath. Mounting the old
+# /var/lib/postgresql/data leaves the image refusing to start.
+# See https://github.com/docker-library/postgres/pull/1259
+x-postgres-defaults: &postgres-defaults
+  restart: unless-stopped
+  networks: [dizen]
+  environment:
+    POSTGRES_USER: dizen
+    POSTGRES_PASSWORD: dizen
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U dizen -d $${POSTGRES_DB}"]
+    interval: 5s
+    timeout: 5s
+    retries: 10
+    start_period: 10s
+
+networks:
+  dizen:
+    driver: bridge
+
+volumes:
+  identity-data:
+  tours-data:
+  booking-data:
+  admin-data:
+  mail-data:
+  redis-data:
+  rabbitmq-data:
+  minio-data:
+  prometheus-data:
+  grafana-data:
+  go-mod-cache:
+
+services:
+  # --- Databases: one per service ------------------------------------------
+  identity-db:
+    <<: *postgres-defaults
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: dizen
+      POSTGRES_PASSWORD: dizen
+      POSTGRES_DB: identity_db
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [identity-data:/var/lib/postgresql]
+
+  tours-db:
+    <<: *postgres-defaults
+    # PostGIS only here (01 section 5): geography columns and GiST indexes for
+    # "tours near me".
+    #
+    # imresamu/postgis rather than the official postgis/postgis: the latter publishes
+    # linux/amd64 only, and the team develops on Apple Silicon. This is the community
+    # multi-arch build of the same Dockerfiles, maintained by a PostGIS docker maintainer.
+    # Production runs on amd64, where either image works.
+    image: imresamu/postgis:18-3.6-alpine
+    environment:
+      POSTGRES_USER: dizen
+      POSTGRES_PASSWORD: dizen
+      POSTGRES_DB: tours_db
+    ports: ["127.0.0.1:5433:5432"]
+    volumes: [tours-data:/var/lib/postgresql]
+
+  booking-db:
+    <<: *postgres-defaults
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: dizen
+      POSTGRES_PASSWORD: dizen
+      POSTGRES_DB: booking_db
+    ports: ["127.0.0.1:5434:5432"]
+    volumes: [booking-data:/var/lib/postgresql]
+
+  admin-db:
+    <<: *postgres-defaults
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: dizen
+      POSTGRES_PASSWORD: dizen
+      POSTGRES_DB: admin_db
+    ports: ["127.0.0.1:5435:5432"]
+    volumes: [admin-data:/var/lib/postgresql]
+
+  mail-db:
+    <<: *postgres-defaults
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: dizen
+      POSTGRES_PASSWORD: dizen
+      POSTGRES_DB: mail_db
+    ports: ["127.0.0.1:5436:5432"]
+    volumes: [mail-data:/var/lib/postgresql]
+
+  # --- Shared infrastructure ------------------------------------------------
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    networks: [dizen]
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    restart: unless-stopped
+    networks: [dizen]
+    environment:
+      RABBITMQ_DEFAULT_USER: dizen
+      RABBITMQ_DEFAULT_PASS: dizen
+    ports:
+      - "127.0.0.1:5672:5672"
+      # Management panel: http://localhost:15672 (dizen / dizen)
+      - "127.0.0.1:15672:15672"
+    volumes: [rabbitmq-data:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  minio:
+    # S3-compatible storage for media and PMTiles (ADR A-5). R2 in production.
+    image: minio/minio:latest
+    restart: unless-stopped
+    networks: [dizen]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: dizen
+      MINIO_ROOT_PASSWORD: dizen12345
+    ports:
+      - "127.0.0.1:9000:9000"
+      # Console: http://localhost:9001
+      - "127.0.0.1:9001:9001"
+    volumes: [minio-data:/data]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # --- Services -------------------------------------------------------------
+  identity:
+    <<: *service-defaults
+    build:
+      context: ..
+      dockerfile: services/identity/Dockerfile
+      target: development
+    environment:
+      <<: *service-env
+      SERVICE_NAME: identity
+      DATABASE_URL: postgres://dizen:dizen@identity-db:5432/identity_db?sslmode=disable
+      REDIS_NAMESPACE: identity
+    ports:
+      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:9091:9090"
+    depends_on:
+      identity-db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.identity.rule=Host(`identity.dizen.localhost`)
+      - traefik.http.services.identity.loadbalancer.server.port=8080
+
+  tours:
+    <<: *service-defaults
+    build:
+      context: ..
+      dockerfile: services/tours/Dockerfile
+      target: development
+    environment:
+      <<: *service-env
+      SERVICE_NAME: tours
+      DATABASE_URL: postgres://dizen:dizen@tours-db:5432/tours_db?sslmode=disable
+      REDIS_NAMESPACE: tours
+    ports:
+      - "127.0.0.1:8082:8080"
+      - "127.0.0.1:9092:9090"
+    depends_on:
+      tours-db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.tours.rule=Host(`tours.dizen.localhost`)
+      - traefik.http.services.tours.loadbalancer.server.port=8080
+
+  booking:
+    <<: *service-defaults
+    build:
+      context: ..
+      dockerfile: services/booking/Dockerfile
+      target: development
+    environment:
+      <<: *service-env
+      SERVICE_NAME: booking
+      DATABASE_URL: postgres://dizen:dizen@booking-db:5432/booking_db?sslmode=disable
+      REDIS_NAMESPACE: booking
+    ports:
+      - "127.0.0.1:8083:8080"
+      - "127.0.0.1:9093:9090"
+    depends_on:
+      booking-db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.booking.rule=Host(`booking.dizen.localhost`)
+      - traefik.http.services.booking.loadbalancer.server.port=8080
+
+  admin:
+    <<: *service-defaults
+    build:
+      context: ..
+      dockerfile: services/admin/Dockerfile
+      target: development
+    environment:
+      <<: *service-env
+      SERVICE_NAME: admin
+      DATABASE_URL: postgres://dizen:dizen@admin-db:5432/admin_db?sslmode=disable
+      REDIS_NAMESPACE: admin
+    ports:
+      - "127.0.0.1:8084:8080"
+      - "127.0.0.1:9094:9090"
+    depends_on:
+      admin-db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.admin.rule=Host(`admin.dizen.localhost`)
+      - traefik.http.services.admin.loadbalancer.server.port=8080
+
+  mail-dispatcher:
+    <<: *service-defaults
+    build:
+      context: ..
+      dockerfile: services/mail-dispatcher/Dockerfile
+      target: development
+    environment:
+      <<: *service-env
+      SERVICE_NAME: mail-dispatcher
+      DATABASE_URL: postgres://dizen:dizen@mail-db:5432/mail_db?sslmode=disable
+      REDIS_NAMESPACE: mail-dispatcher
+    # Only the operational port is published, and it is not routed by Traefik: this service
+    # has no public API (01 section 2), but it still has to be probeable.
+    ports:
+      - "127.0.0.1:8085:8080"
+    depends_on:
+      mail-db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+
+  # --- Edge -----------------------------------------------------------------
+  traefik:
+    image: traefik:v3.6
+    restart: unless-stopped
+    networks: [dizen]
+    command:
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --accesslog=true
+    ports:
+      - "127.0.0.1:80:80"
+      # Dashboard: http://localhost:8090
+      - "127.0.0.1:8090:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # --- Observability --------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    restart: unless-stopped
+    networks: [dizen]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    ports: ["127.0.0.1:9090:9090"]
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:12.3.0
+    restart: unless-stopped
+    networks: [dizen]
+    environment:
+      GF_SECURITY_ADMIN_USER: dizen
+      GF_SECURITY_ADMIN_PASSWORD: dizen
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports: ["127.0.0.1:3000:3000"]
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus]
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.66.0
+    restart: unless-stopped
+    networks: [dizen]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      # UI: http://localhost:16686
+      - "127.0.0.1:16686:16686"
+      # OTLP gRPC, which is what the services export to.
+      - "127.0.0.1:4317:4317"
