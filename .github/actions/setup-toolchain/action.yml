@@ -10,8 +10,9 @@ description: Go, the module cache and the tools pinned in tools/versions.mk
 inputs:
   dart:
     description: >-
-      Install the Dart SDK and protoc-gen-dart as well. Only `make proto` needs them, so it
-      is off by default: it adds about a minute to a job that would not use it.
+      Link protoc-gen-dart as well, which only `make proto` needs. The Dart SDK itself has
+      to already be on PATH: it is installed by the calling job, not here. See the note on
+      the step below.
     required: false
     default: 'false'
 
@@ -45,13 +46,23 @@ runs:
       shell: bash
       run: make tools
 
-    - name: Dart
-      if: inputs.dart == 'true'
-      uses: dart-lang/setup-dart@v1
-
-    # Always, cache hit or not: protoc-gen-dart lives in the pub cache and ./bin only holds
-    # a symlink to it, so restoring ./bin restores a link that points at nothing.
+    # The Dart SDK is deliberately NOT installed here. dart-lang/setup-dart registers a
+    # problem matcher with a path relative to the action currently running, and from inside
+    # a composite action that resolves to *this* directory rather than its own, so it fails
+    # with "Could not find file .../setup-toolchain/dart-analyzer.json". The SDK installs
+    # fine, but every run is annotated with an error.
+    #
+    # So the calling job runs `dart-lang/setup-dart@v1` itself, before this action, and this
+    # one only links the plugin. See the `contract` job in ci.yml.
+    #
+    # This step runs on a cache hit as well: protoc-gen-dart lives in the pub cache and ./bin
+    # only holds a symlink to it, so restoring ./bin restores a link pointing at nothing.
     - name: protoc-gen-dart
       if: inputs.dart == 'true'
       shell: bash
-      run: make tools-dart
+      run: |
+        if ! command -v dart >/dev/null 2>&1; then
+          echo "::error::The Dart SDK is not on PATH. The calling job has to run dart-lang/setup-dart@v1 before this action."
+          exit 1
+        fi
+        make tools-dart

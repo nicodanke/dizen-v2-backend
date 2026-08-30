@@ -27,6 +27,7 @@ DRY_RUN=false
 # that no longer reports.
 CHECKS=(
   "static analysis"
+  "commits"
   "contract"
   "generated queries"
   "secrets"

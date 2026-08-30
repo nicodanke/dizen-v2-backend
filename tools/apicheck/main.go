@@ -22,6 +22,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,6 +32,13 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+)
+
+// The two ways this check fails, as static errors so a caller can branch on them and so the
+// err113 linter has something to match. Both are wrapped with the detail at the call site.
+var (
+	errNoCollection = errors.New("no yaak.*.yaml file")
+	errProblems     = errors.New("problem(s) found")
 )
 
 // resource is the subset of a Yaak file this check reads.
@@ -100,7 +108,7 @@ func run(dir string) error {
 	}
 
 	if len(files) == 0 {
-		return fmt.Errorf("%s has no yaak.*.yaml file", dir)
+		return fmt.Errorf("%w in %s", errNoCollection, dir)
 	}
 
 	sort.Strings(files)
@@ -147,7 +155,7 @@ func run(dir string) error {
 			fmt.Fprintf(os.Stderr, "  - %s\n", failure)
 		}
 
-		return fmt.Errorf("%d problem(s) found", len(failures))
+		return fmt.Errorf("%d %w", len(failures), errProblems)
 	}
 
 	fmt.Printf("==> api-client: %d files, %d requests, %d environments, no credentials committed\n",

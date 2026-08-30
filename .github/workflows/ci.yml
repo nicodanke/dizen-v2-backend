@@ -16,6 +16,11 @@ on:
 
 # A second push to the same branch makes the first run pointless. On main and develop it is
 # not cancelled: those runs are what the deployment and the contract publication key off.
+#
+# The consequence is worth knowing before it confuses somebody: a superseded run ends with
+# "Error: The operation was canceled." wherever it happened to be, which reads exactly like a
+# failure. A run that stops mid-step with that message, and has a newer run behind it, was
+# cancelled here and did not fail.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
@@ -42,6 +47,12 @@ jobs:
       - name: golangci-lint
         run: make lint
 
+      # A direct dependency left marked `// indirect` breaks nothing and is therefore never
+      # noticed: the build works and the tests pass while the manifest lies about what the
+      # module imports.
+      - name: Modules are tidy
+        run: make tidy-check
+
       # `go fix` only has something to say when the Go version moves, so it is here and not
       # in the pre-commit hook (PRD-25 RF-3): running it on every push would be time given
       # away. Applying it and checking the tree is more reliable than reading an exit code.
@@ -65,6 +76,36 @@ jobs:
       - name: Deployment compose
         run: make deploy-check
 
+  commits:
+    name: commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only on pull requests. What reaches main is either the squashed title or the commits of
+    # the branch, depending on the merge button, so both are checked here -- before the merge,
+    # which is the only moment either can still be rewritten.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The range is base..head, so both ends have to exist locally.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-toolchain
+
+      - name: Commit messages
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: make commit-check RANGE="${BASE}..${HEAD}"
+
+      # The title arrives through the environment and never through ${{ }} inside the script.
+      # A pull request title is text a stranger can write, and interpolating it into a shell
+      # command is how a title becomes a command on the runner.
+      - name: Pull request title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | go run ./tools/commitcheck --stdin
+
   contract:
     name: contract
     runs-on: ubuntu-latest
@@ -75,6 +116,11 @@ jobs:
           # buf breaking compares against main, and the generated Dart package is diffed
           # against what is committed: both need the real history, not a shallow clone.
           fetch-depth: 0
+
+      # At the job level and not inside the composite action: setup-dart resolves its
+      # problem matcher against the action that is running, and from inside a composite it
+      # looks for the file in the wrong directory and annotates every run with an error.
+      - uses: dart-lang/setup-dart@v1
 
       - uses: ./.github/actions/setup-toolchain
         with:
@@ -147,16 +193,29 @@ jobs:
   coverage:
     name: coverage gate
     runs-on: ubuntu-latest
-    # Testcontainers pulls Postgres, PostGIS, Redis and RabbitMQ on a cold runner; the
-    # budget is generous so a slow pull is not reported as a broken test.
+    # Testcontainers pulls Postgres, PostGIS, Redis and RabbitMQ on a cold runner and then
+    # starts eighteen containers, which on two cores is minutes and not seconds. The budget
+    # is a safety net for a hung run, not an estimate of a healthy one.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - uses: ./.github/actions/setup-toolchain
 
+      # The same bytes either way, but pulled four at a time and in a step of their own: a
+      # slow registry then reads as a slow pull instead of as a slow test suite. The list
+      # comes from pkg/testutils, so it cannot drift from what the tests actually start.
+      - name: Pre-pull the test images
+        run: |
+          set -o pipefail
+          make test-images | xargs -P 4 -n 1 docker pull -q
+
       # Unit and integration tests in a single measurement. Splitting them would mean two
       # partial profiles and a threshold evaluated against neither (PRD-25 RF-10).
+      #
+      # The modules run in parallel inside the script, because the cost is container startup
+      # and not test logic: eighteen Postgres containers, and six waits that overlap instead
+      # of adding up.
       - name: Tests and the 70% gate
         run: make test-coverage
 

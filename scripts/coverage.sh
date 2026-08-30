@@ -36,43 +36,107 @@ echo "==> running the tests with coverage (tags: ${TAGS:-none})"
 
 # One profile per module, merged afterwards: -coverpkg cannot span modules, so each module is
 # measured against its own packages plus pkg.
-: > "$PROFILE.tmp"
-FIRST=1
+#
+# The modules run in parallel, and the reason is measurable: the suite starts eighteen
+# Postgres containers, and every module costs about the same regardless of how much code it
+# has, because what is being paid for is container startup and not test logic. Sequentially
+# that is the sum of six waits; in parallel it is the longest one. Locally it takes the run
+# from about 171 s to about 49 s, and on a CI runner -- where the waits are longer and the
+# cores fewer -- the ratio is smaller but the saving is larger.
+#
+# Each module gets its own profile and its own log; the logs are printed afterwards, in
+# module order, because interleaved output from six test binaries is unreadable. Set
+# COVERAGE_SEQUENTIAL=1 to get the old behaviour when that interleaving is hiding something.
+SEQUENTIAL="${COVERAGE_SEQUENTIAL:-}"
 
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT INT TERM
+
+MODULES=()
 while IFS= read -r dir; do
   [ -n "$dir" ] || continue
   [ "$dir" = "$ROOT" ] && continue
+  MODULES+=("$dir")
+done < <(go list -m -f '{{.Dir}}')
 
-  rel="${dir#"$ROOT"/}"
-  module_profile="$(mktemp)"
+run_module() {
+  local dir="$1" profile="$2" log="$3"
 
-  printf '\033[1;34m==> %s\033[0m\n' "$rel"
-
-  if ! ( cd "$dir" && go test \
+  ( cd "$dir" && go test \
       ${TAGS:+-tags="$TAGS"} \
       -coverpkg=./... \
       -covermode=atomic \
-      -coverprofile="$module_profile" \
+      -coverprofile="$profile" \
       -timeout=30m \
-      ./... ); then
-    rm -f "$module_profile"
-    echo "" >&2
-    echo "error: the tests failed; coverage was not measured" >&2
-    exit 1
+      ./... ) > "$log" 2>&1
+}
+
+PIDS=()
+
+for index in "${!MODULES[@]}"; do
+  dir="${MODULES[$index]}"
+  rel="${dir#"$ROOT"/}"
+
+  if [ -n "$SEQUENTIAL" ]; then
+    printf '\033[1;34m==> %s\033[0m\n' "$rel"
+
+    # The status is captured from run_module itself. Reading $? after the `cat` below would
+    # report whether printing the log worked, which it always does.
+    status=0
+    run_module "$dir" "$WORK/profile.$index" "$WORK/log.$index" || status=$?
+    echo "$status" > "$WORK/status.$index"
+    continue
   fi
 
-  if [ -s "$module_profile" ]; then
-    if [ "$FIRST" = "1" ]; then
-      cat "$module_profile" >> "$PROFILE.tmp"
-      FIRST=0
-    else
-      # The mode line appears once per profile; only the first is kept.
-      tail -n +2 "$module_profile" >> "$PROFILE.tmp"
-    fi
+  run_module "$dir" "$WORK/profile.$index" "$WORK/log.$index" &
+  PIDS+=("$!")
+done
+
+FAILED=""
+
+for index in "${!MODULES[@]}"; do
+  rel="${MODULES[$index]#"$ROOT"/}"
+
+  if [ -n "$SEQUENTIAL" ]; then
+    status="$(cat "$WORK/status.$index")"
+  else
+    status=0
+    wait "${PIDS[$index]}" || status=$?
   fi
 
-  rm -f "$module_profile"
-done < <(go list -m -f '{{.Dir}}')
+  printf '\033[1;34m==> %s\033[0m\n' "$rel"
+  [ -f "$WORK/log.$index" ] && cat "$WORK/log.$index"
+
+  if [ "$status" != "0" ]; then
+    FAILED="${FAILED} ${rel}"
+  fi
+done
+
+if [ -n "$FAILED" ]; then
+  echo "" >&2
+  echo "error: the tests failed in:${FAILED}" >&2
+  echo "       coverage was not measured" >&2
+  exit 1
+fi
+
+# Merged in module order, not in the order they happened to finish, so the profile is the
+# same on every run and a diff between two runs means a real change.
+: > "$PROFILE.tmp"
+FIRST=1
+
+for index in "${!MODULES[@]}"; do
+  module_profile="$WORK/profile.$index"
+
+  [ -s "$module_profile" ] || continue
+
+  if [ "$FIRST" = "1" ]; then
+    cat "$module_profile" >> "$PROFILE.tmp"
+    FIRST=0
+  else
+    # The mode line appears once per profile; only the first is kept.
+    tail -n +2 "$module_profile" >> "$PROFILE.tmp"
+  fi
+done
 
 mv "$PROFILE.tmp" "$PROFILE"
 

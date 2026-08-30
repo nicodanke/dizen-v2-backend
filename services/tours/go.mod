@@ -6,3 +6,20 @@ go 1.27.0
 // `use` directive in go.work (01 section 3, "no manual replace scattered per service").
 // Declaring it as a require of a module that is never published breaks graph resolution.
 // Consequence: every build -- Dockerfiles included -- must copy the root go.work.
+
+require (
+	github.com/jackc/pgx/v5 v5.10.0
+	github.com/rs/zerolog v1.35.1
+)
+
+require (
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/stretchr/testify v1.12.1 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
+)

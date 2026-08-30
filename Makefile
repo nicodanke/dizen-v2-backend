@@ -119,13 +119,34 @@ fix-check: ## Show pending modernizations without applying them
 lint: ## Run golangci-lint across every module
 	@$(FOR_EACH) $(GOLANGCI_LINT) run --config $(ROOT_DIR)/.golangci.yml
 
+# RANGE overrides what is checked; the default is the commits of this branch against main.
+.PHONY: commit-check
+commit-check: ## Check the commit messages of this branch (Conventional Commits, PRD-25 RF-14)
+	@go run ./tools/commitcheck $(RANGE)
+
 .PHONY: secrets-scan
 secrets-scan: ## Scan the working tree and the history for committed secrets (RNF-4)
 	@$(ROOT_DIR)/scripts/secrets-scan.sh
 
+# `go mod tidy` deliberately ignores go.work: it resolves each module on its own, so on a
+# service module it tries to download .../pkg from GitHub, which is never published (01
+# section 3 forbids a per-service replace, and that is the price). The workspace-aware
+# operation is `go work sync`, which propagates the resolved build list into every module.
+#
+# So: tidy the two modules that can be tidied -- the root and pkg have no intra-repository
+# dependency -- and sync the rest.
 .PHONY: tidy
-tidy: ## Tidy the dependencies of every module
-	@$(FOR_EACH) go mod tidy
+tidy: ## Tidy the root and pkg, and sync the workspace into every module
+	@printf '\033[1;34m==> root\033[0m\n'
+	@go mod tidy
+	@printf '\033[1;34m==> pkg\033[0m\n'
+	@cd pkg && go mod tidy
+	@printf '\033[1;34m==> go work sync\033[0m\n'
+	@go work sync
+
+.PHONY: tidy-check
+tidy-check: ## Fail if `make tidy` leaves an uncommitted diff
+	@$(ROOT_DIR)/scripts/tidy-check.sh
 
 .PHONY: test
 test: ## Unit tests across every module (fast, no Docker)
@@ -134,6 +155,10 @@ test: ## Unit tests across every module (fast, no Docker)
 .PHONY: test-integration
 test-integration: ## Integration tests with testcontainers (requires Docker)
 	@$(FOR_EACH) go test -tags=integration -count=1 -timeout=30m ./...
+
+.PHONY: test-images
+test-images: ## Print the container images the integration tests use
+	@$(ROOT_DIR)/scripts/test-images.sh
 
 .PHONY: test-coverage
 test-coverage: ## Full coverage with the 70% gate (RF-18b)

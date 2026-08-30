@@ -30,10 +30,14 @@ STATUS=0
 while IFS= read -r dir; do
   [ -n "$dir" ] || continue
 
-  # The root module has no packages of its own; skip it to keep the output clean.
-  [ "$dir" = "$ROOT" ] && continue
-
-  rel="${dir#"$ROOT"/}"
+  # The root module used to be skipped as empty. It is not: tools/apicheck lives in it, and
+  # skipping it meant that package was never vetted, never linted and never tidied -- which
+  # is how a stale `// indirect` in the root go.mod survived until an editor pointed at it.
+  if [ "$dir" = "$ROOT" ]; then
+    rel="root"
+  else
+    rel="${dir#"$ROOT"/}"
+  fi
   printf '\033[1;34m==> %s\033[0m\n' "$rel"
 
   # The module-relative path is exported so the command can keep its artifacts apart per

@@ -144,7 +144,8 @@ push to `dizen-v2-mobile` costs nothing here.
 
 | Job | What it verifies |
 |---|---|
-| `static analysis` | gofumpt, `go vet`, golangci-lint, `go fix` applied, the Yaak collection without credentials |
+| `static analysis` | gofumpt, `go vet`, golangci-lint, `go fix` applied, tidy modules, the Yaak collection without credentials, the production compose |
+| `commits` | the commit messages and the pull request title follow Conventional Commits |
 | `contract` | `buf lint`, `buf format`, `buf breaking` against `main`, and `make proto` without a diff |
 | `generated queries` | `make sqlc` without a diff |
 | `secrets` | gitleaks over the working tree **and** the history, blocking |
@@ -152,13 +153,52 @@ push to `dizen-v2-mobile` costs nothing here.
 | `coverage gate` | integration tests with testcontainers and the 70% threshold |
 
 Every job is a `make` target, so a red build is reproduced locally with one command; the
-mapping is in [`CHEATSHEET.md`](CHEATSHEET.md). The coverage report is uploaded as an
+mapping is in [`CHEATSHEET.md`](CHEATSHEET.md).
+
+A run superseded by a newer push to the same branch is cancelled, and it ends mid-step with
+`Error: The operation was canceled.` -- which reads exactly like a failure and is not one.
+If a run stopped partway through and there is a newer run behind it, that is the
+`concurrency` block doing its job.
+
+The coverage gate is the long pole, and the reason is measurable: the suite starts eighteen
+Postgres containers, and every module costs about the same regardless of how much code it
+has, because what is paid for is container startup and not test logic. The modules therefore
+run in parallel -- locally that is 78 s instead of 171 s on a cold test cache. The remaining
+lever is bigger and not pulled yet: one container per *test* could be one per *package*,
+which is what the `Snapshot` and `Restore` helpers in `pkg/testutils` are for. The coverage report is uploaded as an
 artifact of each run, including when the gate fails, which is when somebody actually needs
 to read it. The comment on the pull request and the README badges arrive with `PRD-25`,
 once decision `D-17` settles which tool publishes them.
 
 ```bash
 make secrets-scan   # the same gitleaks check CI runs
+```
+
+### Commit messages
+
+Conventional Commits, enforced. It is not a new convention: `PRD-25` RF-14 generates the
+changelog from the commits, so the format was already assumed -- and a convention nothing
+enforces is one that half the history does not follow, which makes the changelog a list with
+holes in it.
+
+```
+type(scope)!: subject
+```
+
+| | |
+|---|---|
+| type | `build` `chore` `ci` `docs` `feat` `fix` `perf` `refactor` `revert` `style` `test` |
+| scope | optional, lowercase, free text: `tours`, `pkg/amqp`, `deploy` |
+| `!` | optional, marks a breaking change -- the only marker that survives a squash |
+| subject | required, lowercase, no trailing period, header at most 72 characters |
+
+Both the **commits of the branch** and the **pull request title** are checked, because which
+of the two reaches `main` depends on the merge button. Merge and revert commits are exempt:
+they are written by git and by GitHub, not by a person.
+
+```bash
+make commit-check                    # this branch against main
+make commit-check RANGE=HEAD         # the whole history
 ```
 
 ### The other two workflows

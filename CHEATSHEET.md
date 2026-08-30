@@ -201,16 +201,22 @@ fails in CI can be reproduced with one command locally.
 
 ```bash
 make secrets-scan   # gitleaks over the working tree and the history
+make commit-check   # Conventional Commits on this branch (RANGE= overrides)
 ```
 
 | CI job | What it runs | Locally |
 |---|---|---|
 | `static analysis` | format, `go vet`, golangci-lint, `go fix`, the Yaak collection | `make fmt-check vet lint fix-check api-client` |
+| `commits` | Conventional Commits, on the branch and on the PR title | `make commit-check` |
 | `contract` | `buf lint`, `buf format`, `buf breaking` against main, generated code without diff | `make proto-lint proto-breaking proto-check` |
 | `generated queries` | the sqlc output matches the queries | `make sqlc-check` |
 | `secrets` | gitleaks, blocking | `make secrets-scan` |
 | `unit tests` | `go test -race`, no Docker | `make test` |
 | `coverage gate` | integration tests and the 70% threshold | `make test-coverage` |
+
+`make test-coverage` runs the six modules in parallel, since what the suite spends its time
+on is starting eighteen Postgres containers rather than running tests. Set
+`COVERAGE_SEQUENTIAL=1` when the interleaved output is hiding something.
 
 `static analysis` also runs `make deploy-check`, which parses
 `deploy/docker-compose.prod.yml` and fails if it reads a variable that
