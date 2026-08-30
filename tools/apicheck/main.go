@@ -71,10 +71,22 @@ var credentialVariables = []string{
 // ports the compose file publishes.
 const localEnvironmentID = "env_local"
 
-// requiredEnvironments must all be present. A missing one is not a harmless absence: a
-// collection without `local` does not work after `make up`, and one without `prod` is one
-// somebody will recreate by hand, filled in.
-var requiredEnvironments = []string{"env_base", "env_local", "env_staging", "env_prod"}
+// requiredEnvironments is `local` and only `local`, and the reason is a property of Yaak
+// rather than a preference (D-29).
+//
+// Yaak excludes a non-public environment from Directory Sync: it does not write the file and
+// it deletes the one it finds. So an environment is versioned only if it is marked public in
+// the app, and marking `staging` and `prod` public is marking as shared exactly the two
+// places where somebody types a real token. Leaving them out keeps them out of git by
+// construction, which is stronger than this check catching them.
+//
+// `local` is different: it is required, because a collection without it does not work after
+// `make up`, and it is safe, because localAllowedValue below lets it hold nothing but a
+// localhost endpoint or a semver.
+//
+// `base`, `staging` and `prod` are therefore optional -- but any of them that does appear is
+// validated like the rest, so making one public later cannot smuggle a value past this.
+var requiredEnvironments = []string{localEnvironmentID}
 
 // requiredModels are the resource kinds the collection cannot be without.
 var requiredModels = []string{"workspace"}
@@ -171,8 +183,9 @@ func checkCompleteness(environments, models map[string]bool, requests int) []str
 	for _, id := range requiredEnvironments {
 		if !environments[id] {
 			failures = append(failures, fmt.Sprintf(
-				"the %q environment is missing. The collection has to carry all four "+
-					"(base, local, staging, prod)", id))
+				"the %q environment is missing. It is the one the collection cannot work "+
+					"without, and it has to be marked public in Yaak for Directory Sync to "+
+					"write it", id))
 		}
 	}
 
