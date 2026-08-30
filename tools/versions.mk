@@ -15,5 +15,10 @@ MOCKERY_VERSION                := v3.7.4
 MIGRATE_VERSION                := v4.19.1
 GOLANGCI_LINT_VERSION          := v2.13.2
 
+# gitleaks still declares the module path of its former owner, so the install path is
+# zricethezav/gitleaks and not gitleaks/gitleaks. It backs `make secrets-scan` and the
+# secrets job of CI (PRD-18 RF-11, RNF-4).
+GITLEAKS_VERSION               := v8.30.1
+
 # protoc-gen-dart cannot be installed with `go install`: it ships with the Dart SDK.
 PROTOC_PLUGIN_VERSION          := 25.0.0

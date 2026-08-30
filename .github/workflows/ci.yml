@@ -1,0 +1,182 @@
+# The quality pipeline of dizen-v2-backend (PRD-18 RF-11, PRD-25 RF-7).
+#
+# One pipeline per repository, with no path filters and no change detection: if this
+# repository changed, the whole pipeline runs. That is the concrete advantage of having
+# three separate repositories, and the reason a push to dizen-v2-mobile costs nothing here.
+#
+# The jobs are independent on purpose. They run in parallel, and a failure in one still
+# reports the others, so a pull request gets the whole list of what is wrong in one round
+# instead of one problem per push.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+# A second push to the same branch makes the first run pointless. On main and develop it is
+# not cancelled: those runs are what the deployment and the contract publication key off.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-toolchain
+
+      - name: Formatting
+        run: make fmt-check
+
+      - name: go vet
+        run: make vet
+
+      - name: golangci-lint
+        run: make lint
+
+      # `go fix` only has something to say when the Go version moves, so it is here and not
+      # in the pre-commit hook (PRD-25 RF-3): running it on every push would be time given
+      # away. Applying it and checking the tree is more reliable than reading an exit code.
+      - name: Modernizations applied
+        run: |
+          make fix
+          if ! git diff --quiet; then
+            echo "::error::'make fix' changed files. Run it locally and commit the result."
+            git --no-pager diff
+            exit 1
+          fi
+
+      # The Yaak collection is part of the contract surface: an endpoint is not finished
+      # until it has its request, and no credential is ever committed (03 section 8.2).
+      - name: API collection
+        run: make api-client
+
+      # The production compose parses, and every variable it reads is documented in
+      # deploy/dokploy.env.example. Compose only warns about a missing one and carries on
+      # with an empty string, which on a server means an empty database password.
+      - name: Deployment compose
+        run: make deploy-check
+
+  contract:
+    name: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # buf breaking compares against main, and the generated Dart package is diffed
+          # against what is committed: both need the real history, not a shallow clone.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-toolchain
+        with:
+          dart: 'true'
+
+      - name: buf lint
+        run: make proto-lint
+
+      - name: buf format
+        working-directory: proto
+        run: ../bin/buf format --diff --exit-code
+
+      # Hard rule 4: proto changes are always additive. On main this compares main against
+      # itself and finds nothing, which is the correct answer there.
+      - name: buf breaking against main
+        run: |
+          if [ "${{ github.ref_name }}" != "main" ]; then
+            # actions/checkout leaves main as a remote-tracking ref; buf resolves
+            # `branch=main` against the local ones.
+            git fetch --no-tags origin +refs/heads/main:refs/heads/main
+          fi
+          make proto-breaking
+
+      # Hard rule 3: the generated code is committed, so it has to match the protos.
+      - name: Generated code is up to date
+        run: make proto-check
+
+  sqlc:
+    name: generated queries
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-toolchain
+
+      - name: sqlc output is up to date
+        run: make sqlc-check
+
+  secrets:
+    name: secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The history pass needs every commit: a secret added and then deleted in the same
+          # branch leaves a clean tree and a leaked repository (acceptance criterion 8).
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-toolchain
+
+      - name: gitleaks
+        run: make secrets-scan
+
+  test:
+    name: unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-toolchain
+
+      # Fast feedback: the integration tests are behind a build tag, so this job needs no
+      # Docker and finishes long before the coverage one.
+      - name: go test -race
+        run: make test
+
+  coverage:
+    name: coverage gate
+    runs-on: ubuntu-latest
+    # Testcontainers pulls Postgres, PostGIS, Redis and RabbitMQ on a cold runner; the
+    # budget is generous so a slow pull is not reported as a broken test.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-toolchain
+
+      # Unit and integration tests in a single measurement. Splitting them would mean two
+      # partial profiles and a threshold evaluated against neither (PRD-25 RF-10).
+      - name: Tests and the 70% gate
+        run: make test-coverage
+
+      - name: Browsable report
+        if: always()
+        run: |
+          if [ -f coverage.filtered.out ]; then
+            go tool cover -html=coverage.filtered.out -o coverage.html
+          fi
+
+      # Uploaded even when the gate fails: that is precisely when somebody needs to see
+      # which lines are uncovered. The comment on the pull request and the README badge
+      # arrive with PRD-25 RF-9, once D-17 settles which tool publishes them.
+      - name: Upload the coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.html
+            coverage.filtered.out
+          retention-days: 14
+          if-no-files-found: warn

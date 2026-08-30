@@ -1,0 +1,175 @@
+# Publishes the API contract (PRD-18 RF-11, PRD-00 RF-2b, 01 sections 3.1 and 3.2).
+#
+# This repository owns the contract; dizen-v2-mobile and dizen-v2-web consume it pinned to
+# an api-vX.Y.Z tag. With three repositories there is no atomic commit that changes a proto
+# and its consumers, so the tag plus the bump pull request are what replaces it: the change
+# stays visible instead of being silently picked up.
+#
+# Three steps, in this order and no other:
+#   1. tag the contract,
+#   2. publish the OpenAPI as a release artifact,
+#   3. ask the two client repositories to open their bump pull request.
+name: publish-contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'proto/**'
+
+# Note on ordering: this fires on the push, in parallel with the ci run for the same commit,
+# exactly as RF-11 describes it. What keeps a broken contract from being published is the
+# branch protection of main -- nothing reaches it without a green pipeline -- and not this
+# workflow waiting for that one.
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-contract
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish the contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Every api-v* tag has to be visible: the next version is computed from the
+          # latest one.
+          fetch-depth: 0
+
+      # A path filter fires on any commit touching proto/, including one that only reformats
+      # or edits a comment already published under the current tag. Comparing the proto tree
+      # against the last published one answers the real question: did the contract change?
+      - name: Has the contract actually changed?
+        id: changed
+        run: |
+          latest="$(git tag -l 'api-v*' --sort=-v:refname | head -1)"
+
+          if [ -z "$latest" ]; then
+            echo "no contract tag exists yet; this is the first publication"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "previous=$latest" >> "$GITHUB_OUTPUT"
+
+          if git diff --quiet "$latest" HEAD -- proto/; then
+            echo "proto/ is identical to $latest; nothing to publish"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Next contract version
+        id: version
+        if: steps.changed.outputs.publish == 'true'
+        run: |
+          version="$(scripts/next-api-version.sh)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing $version"
+
+      # The generated OpenAPI is committed (hard rule 3) and ci verifies on every pull
+      # request that it matches the protos, so it is taken as it is rather than regenerated:
+      # regenerating here would need the whole toolchain to produce the same bytes.
+      - name: The OpenAPI to attach exists
+        if: steps.changed.outputs.publish == 'true'
+        run: |
+          if ! compgen -G 'gen/openapi/*.yaml' > /dev/null; then
+            echo "::error::gen/openapi/ is empty; the contract cannot be published without it."
+            exit 1
+          fi
+          ls -1 gen/openapi/*.yaml
+
+      - name: Tag the contract
+        if: steps.changed.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "API contract $VERSION"
+          git push origin "$VERSION"
+
+      - name: Release with the OpenAPI attached
+        if: steps.changed.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS: ${{ steps.changed.outputs.previous }}
+        run: |
+          {
+            echo "Contract published from \`${GITHUB_SHA:0:7}\`."
+            echo ""
+            echo "## Consuming it"
+            echo ""
+            echo '```yaml'
+            echo "# dizen-v2-mobile, pubspec.yaml"
+            echo "dizen_api:"
+            echo "  git:"
+            echo "    url: https://github.com/${GITHUB_REPOSITORY}.git"
+            echo "    path: gen/dart/dizen_api"
+            echo "    ref: ${VERSION}"
+            echo '```'
+            echo ""
+            echo "dizen-v2-web generates its client from the OpenAPI attached below."
+            echo ""
+            echo "## Contract changes"
+            echo ""
+            if [ -n "$PREVIOUS" ]; then
+              git log --no-merges --pretty='- %s (%h)' "${PREVIOUS}..HEAD" -- proto/
+            else
+              git log --no-merges --pretty='- %s (%h)' -- proto/
+            fi
+          } > release-notes.md
+
+          gh release create "$VERSION" \
+            --title "API contract $VERSION" \
+            --notes-file release-notes.md \
+            gen/openapi/*.yaml
+
+      # The pull request is opened by each client repository, which is the one that knows how
+      # to bump its own reference: a pubspec ref in mobile, a regenerated client in web. This
+      # repository only says that a new contract exists.
+      #
+      # The token is a PAT with write access to those two repositories; a repository_dispatch
+      # cannot be sent with the automatic GITHUB_TOKEN, which is scoped to this one. While it
+      # is not configured -- or while those repositories are still empty -- the step reports
+      # what is missing instead of failing the publication that already succeeded.
+      - name: Ask the clients for their bump pull request
+        if: steps.changed.outputs.publish == 'true'
+        env:
+          DISPATCH_TOKEN: ${{ secrets.CONTRACT_DISPATCH_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "${DISPATCH_TOKEN:-}" ]; then
+            echo "::warning::CONTRACT_DISPATCH_TOKEN is not configured, so no bump pull request was requested. $VERSION is published; the clients have to bump by hand."
+            exit 0
+          fi
+
+          for repo in dizen-v2-mobile dizen-v2-web; do
+            target="${GITHUB_REPOSITORY_OWNER}/${repo}"
+            echo "==> dispatching to $target"
+
+            status="$(curl -sS -o /tmp/dispatch.out -w '%{http_code}' \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${DISPATCH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${target}/dispatches" \
+              -d "{\"event_type\":\"api-contract-published\",\"client_payload\":{\"api_version\":\"${VERSION}\",\"repository\":\"${GITHUB_REPOSITORY}\",\"commit\":\"${GITHUB_SHA}\"}}")" || status=000
+
+            if [ "$status" = "204" ]; then
+              echo "    requested"
+            else
+              # Not fatal: the tag and the release are already published, and RF-12b says the
+              # backend goes first anyway. A failed dispatch means a manual bump, not a
+              # broken contract.
+              echo "::warning::$target answered $status to the dispatch; that repository has to bump $VERSION by hand."
+              cat /tmp/dispatch.out || true
+            fi
+          done

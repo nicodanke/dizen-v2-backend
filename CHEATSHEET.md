@@ -119,7 +119,7 @@ make fix-check   # go fix has nothing left to modernize
 
 | Work without `make tools` | Need `make tools` |
 |---|---|
-| `build` `test` `vet` `up` `down` `logs` | `lint` `fmt` `proto` `sqlc` `migrate-*` `mocks` |
+| `build` `test` `vet` `up` `down` `logs` | `lint` `fmt` `proto` `sqlc` `migrate-*` `mocks` `secrets-scan` |
 
 ---
 
@@ -194,6 +194,80 @@ token variables are empty everywhere — they are filled in at run time by the s
 
 ---
 
+## Continuous integration
+
+The pipeline lives in `.github/workflows/` and every job runs a `make` target, so what
+fails in CI can be reproduced with one command locally.
+
+```bash
+make secrets-scan   # gitleaks over the working tree and the history
+```
+
+| CI job | What it runs | Locally |
+|---|---|---|
+| `static analysis` | format, `go vet`, golangci-lint, `go fix`, the Yaak collection | `make fmt-check vet lint fix-check api-client` |
+| `contract` | `buf lint`, `buf format`, `buf breaking` against main, generated code without diff | `make proto-lint proto-breaking proto-check` |
+| `generated queries` | the sqlc output matches the queries | `make sqlc-check` |
+| `secrets` | gitleaks, blocking | `make secrets-scan` |
+| `unit tests` | `go test -race`, no Docker | `make test` |
+| `coverage gate` | integration tests and the 70% threshold | `make test-coverage` |
+
+`static analysis` also runs `make deploy-check`, which parses
+`deploy/docker-compose.prod.yml` and fails if it reads a variable that
+`deploy/dokploy.env.example` does not document. Compose only warns about a missing variable
+and carries on with an empty string, and on a server that is an empty database password.
+
+The other two workflows are not run by hand: `publish-contract` tags `api-vX.Y.Z` when a
+change to `proto/` reaches `main`, and `release` deploys to production when a `v*` tag is
+created. `scripts/next-api-version.sh` prints what the next contract tag would be, which is
+useful for checking before merging.
+
+```bash
+scripts/next-api-version.sh          # the next api-v tag, minor bump by default
+scripts/branch-protection.sh --dry-run   # the protection the two branches should have
+```
+
+---
+
+## Deployment
+
+`deploy/docker-compose.prod.yml` is what Dokploy runs, in two separate projects
+(`dizen-staging`, `dizen-production`) that share no database, no domain and no variable.
+`deploy/dokploy.env.example` is the inventory of those variables, versioned empty.
+
+```bash
+make deploy-check    # the compose parses and every variable it reads is documented
+```
+
+| | Staging | Production |
+|---|---|---|
+| Deploys from | push to `develop` | tag `v*` on `main` |
+| Basic authentication at the edge | yes, on the REST hosts | no |
+| Valhalla and planetiler | yes, behind the `authoring` and `tiles` profiles | no |
+| Trace sampling | 1.0 | a fraction |
+
+```bash
+make backup-drill    # the monthly restore drill: dump, upload, restore, compare
+```
+
+The drill runs the real backup code against throwaway containers and fails if a single row
+comes back different. It is the restore test RF-9 asks for, and the reason it is a command
+is that a documented procedure nobody runs produces a document, not a tested backup.
+
+Two things to know before touching it:
+
+- **A bcrypt hash in `BASIC_AUTH_USERS` needs every `$` doubled.** `$` is what Compose
+  interpolates, so an unescaped hash arrives mutilated and the login never works.
+- **The gRPC services need `scheme=h2c`.** Without it Traefik downgrades the internal leg to
+  HTTP/1.1 and every gRPC call fails with an unreadable framing error. Verify it against the
+  real domain:
+
+```bash
+grpcurl -d '{}' grpc.dizen.app:443 dizen.identity.v1.HealthService/HealthPing
+```
+
+---
+
 ## Other
 
 ```bash
@@ -211,8 +285,8 @@ make help      # every target with its description
 
 ```bash
 make fmt && make fix && make lint && make test-coverage
-make proto-check && make sqlc-check
+make proto-check && make sqlc-check && make secrets-scan
 ```
 
-The last two need an initialized git repository, since they compare against what is
+The last three need an initialized git repository, since they compare against what is
 committed.

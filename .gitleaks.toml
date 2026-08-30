@@ -1,0 +1,26 @@
+# gitleaks configuration (PRD-18 RF-11, RNF-4: no secret in the repository or in the logs).
+#
+# The default rule set is the whole point of using gitleaks, so it is extended rather than
+# replaced: `useDefault` keeps every upstream rule and this file only adds what is specific
+# to this repository.
+#
+# The allowlist is deliberately short. Every path in it is build output that is already
+# git-ignored, so allowing it hides nothing that could ever be committed; anything else --
+# .env.example files, the compose credentials of the local environment, testdata -- is
+# scanned like the rest of the tree, which is what makes the check worth having.
+
+title = "dizen-v2-backend"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Build output: tool binaries, compiled services and coverage profiles"
+# The condition is the path alone; a match on any of these needs no further justification.
+condition = "OR"
+paths = [
+  '''^bin/''',
+  '''^dist/''',
+  '''^coverage(\.[a-z]+)?\.out$''',
+  '''^coverage\.html$''',
+]

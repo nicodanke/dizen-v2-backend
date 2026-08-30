@@ -16,8 +16,8 @@ Product and architecture documentation lives outside this repository, in
 | Docker | for the local environment and the integration tests |
 | Dart SDK | only to regenerate the `gen/dart/dizen_api` package |
 
-Everything else -- buf, sqlc, mockery, migrate, golangci-lint and the protoc plugins -- is
-installed pinned into `./bin` by `make tools`. Versions live in
+Everything else -- buf, sqlc, mockery, migrate, golangci-lint, gitleaks and the protoc
+plugins -- is installed pinned into `./bin` by `make tools`. Versions live in
 [`tools/versions.mk`](tools/versions.mk), which is the single source of truth.
 
 ## Getting started
@@ -134,6 +134,172 @@ make proto-check      # fail if the generated code is stale
 Contract changes are **always additive**: a field number is never reused, and `buf
 breaking` enforces it. When a break is unavoidable, a `v2` is created and both coexist
 (01 section 3.2).
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and on every push to `main` and
+`develop`. There are no path filters and no change detection: if this repository changed,
+the whole pipeline runs. That is the concrete advantage of three separate repositories -- a
+push to `dizen-v2-mobile` costs nothing here.
+
+| Job | What it verifies |
+|---|---|
+| `static analysis` | gofumpt, `go vet`, golangci-lint, `go fix` applied, the Yaak collection without credentials |
+| `contract` | `buf lint`, `buf format`, `buf breaking` against `main`, and `make proto` without a diff |
+| `generated queries` | `make sqlc` without a diff |
+| `secrets` | gitleaks over the working tree **and** the history, blocking |
+| `unit tests` | `go test -race`, no Docker |
+| `coverage gate` | integration tests with testcontainers and the 70% threshold |
+
+Every job is a `make` target, so a red build is reproduced locally with one command; the
+mapping is in [`CHEATSHEET.md`](CHEATSHEET.md). The coverage report is uploaded as an
+artifact of each run, including when the gate fails, which is when somebody actually needs
+to read it. The comment on the pull request and the README badges arrive with `PRD-25`,
+once decision `D-17` settles which tool publishes them.
+
+```bash
+make secrets-scan   # the same gitleaks check CI runs
+```
+
+### The other two workflows
+
+| Workflow | Fires on | Does |
+|---|---|---|
+| `publish-contract` | a push to `main` touching `proto/` | tags `api-vX.Y.Z`, publishes the OpenAPI as a release artifact, and asks `dizen-v2-mobile` and `dizen-v2-web` for their bump pull request |
+| `release` | a `v*` tag on `main` | changelog, GitHub release, and the production deployment webhook of Dokploy |
+
+The contract version is independent of the version of the services: `v1.4.0` is a release of
+this backend, `api-v1.4.0` is a state of the API that the two clients pin themselves to. The
+bump is the minor one by default; `scripts/next-api-version.sh` prints what the next tag
+would be, and a commit reaching `main` can override it with an `api-release: major` or
+`api-release: patch` trailer.
+
+**The backend deploys first, always** (01 section 3.2): contract changes are additive, so a
+published app keeps working against a newer backend, and the other way around is not
+guaranteed. The release workflow depends on neither of the other two repositories.
+
+### Branches and secrets
+
+`main` is production and `develop` is staging; work happens in `feature/*` and `hotfix/*`.
+Both protected branches require the six jobs above as status checks --
+`scripts/branch-protection.sh` applies that with the GitHub CLI, and `--dry-run` shows what
+it would send without touching anything.
+
+| Secret | Used by | Missing it means |
+|---|---|---|
+| `DOKPLOY_PRODUCTION_WEBHOOK_URL` | `release` | the release fails: publishing notes without deploying is worse than failing |
+| `CONTRACT_DISPATCH_TOKEN` | `publish-contract` | the contract is still published; the clients bump by hand |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | `release` | no notification, nothing else changes |
+
+Each repository holds its own secrets and only its own: this one never sees the store
+signing credentials, and `dizen-v2-mobile` never sees a database URL (`PRD-18` RF-11b).
+
+## Deployment
+
+[`deploy/docker-compose.prod.yml`](deploy/docker-compose.prod.yml) is what Dokploy runs, and
+one file serves both environments: `dizen-staging` and `dizen-production` are two separate
+Dokploy projects with their own databases, domains and variables, and nothing shared between
+them. Everything that differs is a variable;
+[`deploy/dokploy.env.example`](deploy/dokploy.env.example) names every one of them, empty,
+and the values live only in Dokploy (hard rule 6).
+
+```bash
+make deploy-check   # the compose parses and every variable it reads is documented
+```
+
+That check is in CI. Compose only *warns* about a variable it cannot resolve and carries on
+with an empty string, which on a server is an empty database password or a router with no
+host, so the warning is turned into a failure.
+
+### What runs
+
+Five services, five Postgres (one per service, never shared), Redis and RabbitMQ. The
+databases publish no ports and are not on the network Traefik can see: they are reachable
+only from the private bridge, and administrative access is over an SSH tunnel. Every
+container carries an explicit CPU and memory limit so one service cannot starve the rest.
+
+### Routing
+
+| Host | Goes to |
+|---|---|
+| `api.dizen.app` | the REST gateway, path-routed: `/v1/identity/*`, `/v1/tours/*`, `/v1/booking/*` |
+| `grpc.dizen.app` | gRPC for the mobile app, routed by proto package, **h2c end to end** |
+| `admin-api.dizen.app` | the `admin` service, REST only -- the dashboard does not speak gRPC |
+
+Both rules rest on one convention: **the first segment after `/v1/` and the proto package
+both carry the service name**. That is what keeps the routing a constant instead of a table
+that grows with every RPC, and every new `google.api.http` annotation has to respect it.
+Only `/v1/` is published; `/livez`, `/readyz` and `/metrics` answer on the same port and stay
+on the internal network.
+
+`scheme=h2c` on the gRPC services is the line this kind of deployment most often gets wrong:
+without it Traefik downgrades the internal leg to HTTP/1.1 and every call dies with an
+unreadable framing error. It is verified with `grpcurl` against the public domain, not by
+hand:
+
+```bash
+grpcurl -d '{}' grpc.dizen.app:443 dizen.identity.v1.HealthService/HealthPing
+```
+
+### Authoring: Valhalla and the tiles
+
+Valhalla routes only while a tour is being authored (`07` section 3.2), and `planetiler`
+generates the `.pmtiles` of a region. Neither is reachable from the internet -- they are not
+on the network Traefik sees -- and both are behind compose profiles, so they run in staging
+and not in production: the dashboard is their only user, and a re-import must not compete for
+CPU with real traffic.
+
+```bash
+docker compose --profile authoring up -d      # Valhalla
+docker compose --profile tiles run --rm planetiler   # one-shot, generates a .pmtiles
+```
+
+### Backups
+
+A daily dump of the five databases goes to a bucket **outside this server**, keeping 7
+daily, 4 weekly and 3 monthly (`RF-9`). It runs in its own container rather than as a
+Dokploy database backup, because these databases belong to a compose stack and Dokploy can
+only back up what it created.
+
+```bash
+docker compose run --rm backup backup    # one run now
+docker compose run --rm backup verify    # what is stored
+docker compose run --rm backup restore   # lists what can be restored
+```
+
+The dumps are in `pg_dump` custom format, so each one is verified as readable before being
+uploaded: "the backup ran" and "the backup can be restored" are not the same claim. A run
+that fails on any database uploads nothing, because a partial set is worse than none -- it
+looks like a backup.
+
+`restore` writes nothing without `--yes`. It drops and recreates every object in the target
+database, and the moment it gets run is an incident, which is when a typo is most likely.
+
+**The drill is a command, not a paragraph:**
+
+```bash
+make backup-drill
+```
+
+It builds the backup image and runs the whole path against real containers -- a database
+with data, MinIO standing in for R2, a dump, an upload, a restore into an *empty* database,
+and a row-by-row comparison -- plus the retention rules. Run it monthly, which is the
+documented restore test `RF-9` asks for, and after any change under `deploy/backup/`. It
+touches no real environment: its own network, its own containers, its own bucket, all
+removed on exit.
+
+Penpot (`design.dizen.app`) is deployed as its own Dokploy application and is not in this
+compose, so it is **not covered yet**: `RF-9` includes it, and losing the design files is as
+expensive as losing the data. Adding it is a `DSN_PENPOT` in `BACKUP_DATABASES` plus its
+file volume, once that application exists.
+
+### Known gap
+
+The rolling update of `RNF-2` is **not** achieved by plain Compose: `docker compose up`
+recreates a container rather than holding the old one until the new one answers `/readyz`,
+so a deployment has a short window of refused connections. Closing it needs either Dokploy's
+Swarm-backed application deployments or a second replica behind Traefik. It is written down
+here rather than assumed, and is tracked as decision `D-25`.
 
 ## Hard rules
 

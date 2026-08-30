@@ -1,0 +1,57 @@
+# Composite action shared by every job that needs to build or generate anything.
+#
+# It exists so the toolchain is described once. The pinned tools are the same ones a
+# developer gets from `make tools`, installed from the same tools/versions.mk, because a CI
+# that installs different versions than the team runs locally reports failures nobody can
+# reproduce.
+name: Set up the toolchain
+description: Go, the module cache and the tools pinned in tools/versions.mk
+
+inputs:
+  dart:
+    description: >-
+      Install the Dart SDK and protoc-gen-dart as well. Only `make proto` needs them, so it
+      is off by default: it adds about a minute to a job that would not use it.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+
+  steps:
+    - name: Go
+      id: go
+      uses: actions/setup-go@v5
+      with:
+        # go.work is the single source of the version, the same file the workspace builds
+        # from. Naming a version here would let the two drift.
+        go-version-file: go.work
+        cache-dependency-path: |
+          go.sum
+          pkg/go.sum
+          services/*/go.sum
+
+    # ./bin holds ten binaries that take about three minutes to build from source. They only
+    # change when tools/versions.mk or the Go version does, which is exactly the cache key.
+    - name: Restore the pinned tools
+      id: tools
+      uses: actions/cache@v4
+      with:
+        path: bin
+        key: tools-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles('tools/versions.mk') }}
+
+    - name: Install the pinned tools
+      if: steps.tools.outputs.cache-hit != 'true'
+      shell: bash
+      run: make tools
+
+    - name: Dart
+      if: inputs.dart == 'true'
+      uses: dart-lang/setup-dart@v1
+
+    # Always, cache hit or not: protoc-gen-dart lives in the pub cache and ./bin only holds
+    # a symlink to it, so restoring ./bin restores a link that points at nothing.
+    - name: protoc-gen-dart
+      if: inputs.dart == 'true'
+      shell: bash
+      run: make tools-dart

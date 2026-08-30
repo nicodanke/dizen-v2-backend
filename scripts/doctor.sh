@@ -150,7 +150,9 @@ else
   check_tool migrate       MIGRATE_VERSION       './bin/migrate -version'
   check_tool golangci-lint GOLANGCI_LINT_VERSION './bin/golangci-lint --version | awk "{print \$4}"'
 
-  for tool in protoc-gen-go protoc-gen-go-grpc protoc-gen-grpc-gateway protoc-gen-openapi mockery; do
+  # gitleaks is in the presence loop rather than in check_tool because a binary built with
+  # `go install` answers "version is set by build process": there is no version to compare.
+  for tool in protoc-gen-go protoc-gen-go-grpc protoc-gen-grpc-gateway protoc-gen-openapi mockery gitleaks; do
     if [ -x "$ROOT/bin/$tool" ]; then
       ok "$tool" "installed"
     else

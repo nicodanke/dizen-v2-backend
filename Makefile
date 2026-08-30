@@ -20,6 +20,7 @@ SQLC           := $(TOOLS_BIN)/sqlc
 MOCKERY        := $(TOOLS_BIN)/mockery
 MIGRATE        := $(TOOLS_BIN)/migrate
 GOLANGCI_LINT  := $(TOOLS_BIN)/golangci-lint
+GITLEAKS       := $(TOOLS_BIN)/gitleaks
 
 SERVICES := identity tours booking admin mail-dispatcher
 
@@ -50,6 +51,7 @@ tools: ## Install the tools pinned in tools/versions.mk into ./bin
 	@GOWORK=off GOBIN=$(TOOLS_BIN) go install github.com/vektra/mockery/v3@$(MOCKERY_VERSION)
 	@GOWORK=off GOBIN=$(TOOLS_BIN) go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
 	@GOWORK=off GOBIN=$(TOOLS_BIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@GOWORK=off GOBIN=$(TOOLS_BIN) go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
 	@# Dart is optional: it is only needed to regenerate the Dart package, and the generated
 	@# code is committed. Missing it must not block a first run, so this warns instead of
 	@# failing. `make tools-dart` on its own is strict, because asking for it explicitly
@@ -116,6 +118,10 @@ fix-check: ## Show pending modernizations without applying them
 .PHONY: lint
 lint: ## Run golangci-lint across every module
 	@$(FOR_EACH) $(GOLANGCI_LINT) run --config $(ROOT_DIR)/.golangci.yml
+
+.PHONY: secrets-scan
+secrets-scan: ## Scan the working tree and the history for committed secrets (RNF-4)
+	@$(ROOT_DIR)/scripts/secrets-scan.sh
 
 .PHONY: tidy
 tidy: ## Tidy the dependencies of every module
@@ -197,6 +203,17 @@ ps: ## Show the state of the environment
 .PHONY: restart
 restart: ## Restart one service. Usage: make restart SERVICE=identity
 	@$(COMPOSE) restart $(SERVICE)
+
+COMPOSE_PROD := docker compose -f $(ROOT_DIR)/deploy/docker-compose.prod.yml \
+	--env-file $(ROOT_DIR)/deploy/dokploy.env.example
+
+.PHONY: deploy-check
+deploy-check: ## Validate the production compose against the documented variables (RF-3)
+	@$(ROOT_DIR)/scripts/deploy-check.sh
+
+.PHONY: backup-drill
+backup-drill: ## Restore drill: dump, upload, restore and compare against real containers (RF-9)
+	@$(ROOT_DIR)/scripts/backup-drill.sh
 
 .PHONY: seed
 seed: ## Load sample data into the local environment

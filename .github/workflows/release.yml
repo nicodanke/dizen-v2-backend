@@ -1,0 +1,116 @@
+# Production release (PRD-18 RF-11, RF-12, RF-12b).
+#
+# A tag `vX.Y.Z` on main is the only thing that deploys to production. Staging follows
+# develop and is wired in Dokploy (RF-4); this workflow is the production half, and it
+# deliberately does not depend on dizen-v2-mobile or dizen-v2-web: the backend goes first,
+# always, because the contract is additive and a published app has to keep working against
+# a newer backend (RF-12b, 01 section 3.2).
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The changelog is built from the previous tag, so every tag has to be visible.
+          fetch-depth: 0
+
+      # A tag on a branch that never reached main is a version nobody reviewed. Producing a
+      # release from it would deploy code that did not go through the pipeline.
+      - name: The tag is on main
+        run: |
+          if ! git branch -r --contains "$GITHUB_SHA" | grep -qE '^\s*origin/main$'; then
+            echo "::error::${GITHUB_REF_NAME} points at a commit that is not on main. Production is only released from main (RF-12)."
+            exit 1
+          fi
+
+      - name: Changelog
+        id: changelog
+        run: |
+          previous="$(git tag -l 'v*' --sort=-v:refname | grep -vFx "$GITHUB_REF_NAME" | head -1)"
+
+          {
+            if [ -n "$previous" ]; then
+              echo "Changes since ${previous}."
+              echo ""
+              git log --no-merges --pretty='- %s (%h)' "${previous}..${GITHUB_REF_NAME}"
+            else
+              echo "First release."
+              echo ""
+              git log --no-merges --pretty='- %s (%h)' "$GITHUB_REF_NAME"
+            fi
+          } > release-notes.md
+
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          cat release-notes.md
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md
+
+      # Dokploy pulls, builds and rolls the containers over one by one, holding the old one
+      # until the new one answers /readyz (RF-10, RNF-2). This step only asks it to start;
+      # what confirms the deployment is the health of the environment afterwards.
+      #
+      # Missing secret is a failure and not a warning: a release that publishes notes and
+      # deploys nothing is the worst of the two outcomes, because it looks finished.
+      - name: Deploy to production
+        env:
+          WEBHOOK: ${{ secrets.DOKPLOY_PRODUCTION_WEBHOOK_URL }}
+        run: |
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::error::The DOKPLOY_PRODUCTION_WEBHOOK_URL secret is missing, so ${GITHUB_REF_NAME} was published but not deployed. Configure it in the repository settings (RF-8)."
+            exit 1
+          fi
+
+          echo "==> triggering the production deployment"
+          curl --fail-with-body -sS --retry 3 --retry-delay 5 --max-time 60 \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            -d "{\"ref\":\"${GITHUB_REF_NAME}\",\"commit\":\"${GITHUB_SHA}\"}" \
+            "$WEBHOOK"
+          echo ""
+          echo "==> requested; follow it in Dokploy"
+
+      # Optional and last: if the notification fails, the deployment already happened and the
+      # release must not be reported as broken. The Sentry release for this commit arrives
+      # with PRD-24 RF-8.
+      - name: Notify
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OUTCOME: ${{ job.status }}
+        run: |
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "no notification channel configured; skipping"
+            exit 0
+          fi
+
+          text="dizen-v2-backend ${GITHUB_REF_NAME}: deployment to production ${OUTCOME}. https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}"
+
+          curl -sS --max-time 30 \
+            -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${text}" \
+            > /dev/null || echo "::warning::the notification could not be sent"
