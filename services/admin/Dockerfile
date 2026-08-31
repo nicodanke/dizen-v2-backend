@@ -9,7 +9,11 @@
 #   docker build -f services/admin/Dockerfile --target production .
 
 # --- builder ----------------------------------------------------------------
-FROM golang:1.27-alpine AS builder
+# --platform=$BUILDPLATFORM pins the builder to the architecture of the machine doing the
+# building, and TARGETARCH below tells Go what to emit. The compiler then cross-compiles
+# natively instead of the whole toolchain running under emulation, which is the difference
+# between a minute and several when an arm64 laptop builds the amd64 image the VPS runs.
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 # git is needed by the module downloader; the rest of the toolchain is not.
 RUN apk add --no-cache git ca-certificates tzdata
@@ -39,9 +43,14 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 
+# Declared here, after the dependency layers, so those stay cached across architectures:
+# only the build below depends on the target.
+ARG TARGETARCH
+
 # CGO off and a stripped binary, so the production stage can be a scratch-like image with
 # no libc at all.
 ENV CGO_ENABLED=0 GOOS=linux
+ENV GOARCH=${TARGETARCH}
 
 # Both caches mounted: the module one because the download above no longer leaves modules
 # in a layer, and the compiler one because without it every service recompiles the whole
