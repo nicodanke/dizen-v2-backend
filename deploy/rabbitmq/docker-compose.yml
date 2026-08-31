@@ -1,0 +1,86 @@
+# RabbitMQ for one environment (PRD-18 RF-3, D-32).
+#
+# The data stores live outside the application compose, so this is its own Dokploy project:
+# one per environment, nothing shared between staging and production, and nothing shared with
+# the v1 stack either. Deploy it once as `dizen-v2-rabbitmq-staging` and again as
+# `dizen-v2-rabbitmq-production`, each with its own variables.
+#
+# There is nothing to set up inside the broker. The services declare their own topology at
+# startup -- the `dizen.events` topic exchange, one queue per consumer, each with its dead
+# letter queue and retry policy (01 section 4.3) -- so a broker that comes up empty is a
+# broker that is ready.
+#
+# It is not published to the internet: only the services reach it, over dokploy-network. The
+# management UI is bound to the loopback of the host, which means an SSH tunnel:
+#
+#   ssh -L 15672:127.0.0.1:15672 <user>@<vps>    then http://localhost:15672
+
+name: dizen-v2-rabbitmq-${DIZEN_ENV}
+
+networks:
+  # Created by Dokploy. This is where the services that publish and consume live.
+  dokploy-network:
+    external: true
+
+volumes:
+  rabbitmq-data:
+
+services:
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    restart: unless-stopped
+    networks: [dokploy-network]
+
+    # The container name is fixed because it is also the hostname the services connect to:
+    # AMQP_URL points at amqp://<user>:<pass>@dizen-v2-rabbitmq-<env>:5672/. Without it Docker
+    # would generate a name and the DSN would have to change on every recreation.
+    container_name: dizen-v2-rabbitmq-${DIZEN_ENV}
+
+    # RabbitMQ writes its data under a directory named after the node, and the node name is
+    # derived from the hostname. Pinning the hostname is what keeps a recreated container
+    # finding the queues the previous one left behind instead of coming up empty.
+    hostname: dizen-v2-rabbitmq-${DIZEN_ENV}
+
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+
+      # The memory and disk limits are NOT set here. The image rejects
+      # RABBITMQ_VM_MEMORY_HIGH_WATERMARK and RABBITMQ_DISK_FREE_LIMIT as deprecated and
+      # refuses to start, so they live in rabbitmq.conf, mounted below.
+
+    ports:
+      # AMQP is NOT published: the services reach it over dokploy-network by container name.
+      # Only the management UI is bound, and only to the loopback of the host, so it is
+      # reachable through an SSH tunnel and from nowhere else.
+      - "127.0.0.1:15672:15672"
+
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      # Read-only: the broker reads it at boot and has no reason to write it.
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 512M
+        reservations:
+          memory: 192M
+
+    healthcheck:
+      # `check_running` answers once the node is up; `check_port_connectivity` also proves
+      # the listener accepts connections, which is what the services actually need.
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_port_connectivity"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      # A cold start replays the persisted queues; on a small broker this is seconds, but the
+      # budget is generous so a slow start is not reported as a broken one.
+      start_period: 90s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -289,6 +289,24 @@ Five services and the backup container. **The data stores are not in this compos
 Redis and RabbitMQ are managed outside it and arrive as connection strings, the same way the
 v1 stack does it (`D-32`). One database and one credential per service, no cross-access.
 
+One Redis and one RabbitMQ per environment, not one per service: Redis keys are already
+namespaced per service, and the broker has a single exchange. [`deploy/rabbitmq/`](deploy/rabbitmq/)
+is a compose stack for the broker, deployed as its own Dokploy project — there is nothing to
+configure inside it, because the services declare their own exchange, queues, dead letter
+queues and bindings at startup.
+
+Two settings on those stores are worth getting right the first time, and both are the kind
+that fail quietly:
+
+- **RabbitMQ's memory watermark must be absolute.** Its default is 40% of the memory it can
+  see, and in a container that is the memory of the *host* -- which also runs v1. It would
+  grow past its own limit and be OOM-killed with nothing in its log to explain it. It is set
+  in `deploy/rabbitmq/rabbitmq.conf`, because the image rejects the old environment variable
+  and refuses to start.
+- **Redis needs `maxmemory-policy noeviction`.** An LRU policy would evict entries of the
+  session revocation list, which turns a revoked token back into a valid one -- a silent
+  security failure, under pressure, that no test would catch.
+
 Every container carries an explicit CPU and memory limit, which matters more here than it
 would on an empty machine: this VPS also runs v1.
 

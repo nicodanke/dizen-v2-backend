@@ -1,0 +1,96 @@
+# Redis for one environment (PRD-18 RF-3, D-32).
+#
+# Its own Dokploy project, one per environment, nothing shared between staging and production
+# and nothing shared with the v1 stack. One instance serves the five services: their keys are
+# already namespaced by REDIS_NAMESPACE, so five instances would be five things to operate
+# for nothing.
+#
+# It is deliberately NOT part of the application compose. A cache and a broker must survive
+# an application deploy; if they lived in that file, every push would recreate them.
+#
+# Not published to the internet: the services reach it over dokploy-network. The port is
+# bound to the loopback of the host for debugging, which means an SSH tunnel:
+#
+#   ssh -L 6379:127.0.0.1:6379 <user>@<vps>    then redis-cli -a <password>
+
+name: dizen-v2-redis-${DIZEN_ENV}
+
+networks:
+  dokploy-network:
+    external: true
+
+volumes:
+  redis-data:
+
+services:
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    networks: [dokploy-network]
+
+    # Fixed, because it is the host the services connect to: REDIS_URL points at
+    # redis://:<password>@dizen-v2-redis-<env>:6379/0.
+    container_name: dizen-v2-redis-${DIZEN_ENV}
+
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD}
+
+      # Append-only persistence. Redis here is not only a cache: it also holds the session
+      # revocation list (01 section 6), and a restart that forgets it turns every revoked
+      # token back into a valid one.
+      - --appendonly
+      - "yes"
+
+      # Below the container limit, for the same reason RabbitMQ's watermark is absolute: the
+      # process should hit its own limit and say so, not be OOM-killed by the kernel with
+      # nothing in its log.
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-192mb}
+
+      # THE decision in this file, and it is not a performance setting.
+      #
+      # Redis holds three kinds of data here and they do not tolerate eviction equally:
+      # losing a cached tour is free, losing a rate-limit counter costs somebody a free
+      # request, and losing an entry of the revocation list makes a revoked token valid
+      # again. An LRU policy would evict all three indiscriminately, so it turns a memory
+      # spike into a silent security failure -- one that happens under pressure, and that no
+      # test catches.
+      #
+      # `noeviction` makes the write fail loudly instead. At this size everything fits with
+      # room to spare; revisit when PRD-01 implements revocation and the real sizes are known.
+      - --maxmemory-policy
+      - noeviction
+
+    environment:
+      # redis-cli reads REDISCLI_AUTH, which keeps the password out of the process list and
+      # out of the warning it prints when -a is used on the command line.
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+
+    ports:
+      - "127.0.0.1:6379:6379"
+
+    volumes:
+      - redis-data:/data
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          memory: 64M
+
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

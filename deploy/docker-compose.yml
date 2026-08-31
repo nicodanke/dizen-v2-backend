@@ -139,7 +139,11 @@ services:
     image: redis:8-alpine
     restart: unless-stopped
     networks: [dizen]
-    command: ["redis-server", "--appendonly", "yes"]
+    # noeviction, matching the deployed environments (deploy/redis/): the reason is not
+    # performance but that Redis also holds the session revocation list, and a policy that
+    # evicts it turns a revoked token back into a valid one. Local behaviour has to match, or
+    # the one environment where that is reproducible is the one nobody runs.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     ports: ["127.0.0.1:6379:6379"]
     volumes: [redis-data:/data]
     healthcheck:
