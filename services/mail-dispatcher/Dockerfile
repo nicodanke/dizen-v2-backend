@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 # Multi-stage image for the mail-dispatcher service (RF-16).
 #
 # Built from the repository root, not from this directory: the go.work of the root is what
@@ -25,7 +27,10 @@ COPY services/booking/go.mod ./services/booking/
 COPY services/admin/go.mod ./services/admin/
 COPY services/mail-dispatcher/go.mod ./services/mail-dispatcher/
 
-RUN go mod download
+# The module cache is a BuildKit cache mount rather than a layer: it is shared by every
+# service's build and survives a change that invalidates the layers above it.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 COPY pkg/ ./pkg/
 COPY services/mail-dispatcher/ ./services/mail-dispatcher/
@@ -38,7 +43,12 @@ ARG BUILD_DATE=unknown
 # no libc at all.
 ENV CGO_ENABLED=0 GOOS=linux
 
-RUN go build \
+# Both caches mounted: the module one because the download above no longer leaves modules
+# in a layer, and the compiler one because without it every service recompiles the whole
+# dependency tree -- the same otel, grpc, pgx and prometheus packages, five times over.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build \
         -trimpath \
         -ldflags="-s -w \
             -X github.com/nicodanke/dizen-v2-backend/pkg/version.Version=${VERSION} \
