@@ -265,7 +265,7 @@ There is no `.env` on the server and none in this repository.
 the values live in Doppler:
 
 ```
-Doppler project `dizen-v2-backend`
+Doppler project `dizen-backend`
   ├── config `dev`  ->  `doppler run -- ...`      the developer machine
   ├── config `stg`  ->  provider `doppler-stg`    ->  dizen-v2-staging
   └── config `prd`  ->  provider `doppler-prd`    ->  dizen-v2-production

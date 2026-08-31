@@ -285,7 +285,8 @@ grpcurl -d '{}' grpc.staging.v2.dizen.pro:443 dizen.identity.v1.HealthService/He
 
 ```bash
 make mocks     # regenerate the mocks over the repository interfaces
-make jwt-key   # generate an Ed25519 key pair for development
+make jwt-key     # Ed25519 key pair, escaped, for a local .env
+make jwt-key-pem # the same as real PEM, for Doppler -- the escaped form does not parse there
 make tools-dart # install protoc-gen-dart on its own, after installing the Dart SDK
 make tidy      # tidy the dependencies of every module
 make clean     # remove ./bin, dist/ and the coverage artifacts
