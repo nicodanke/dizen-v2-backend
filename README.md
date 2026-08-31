@@ -160,12 +160,18 @@ A run superseded by a newer push to the same branch is cancelled, and it ends mi
 If a run stopped partway through and there is a newer run behind it, that is the
 `concurrency` block doing its job.
 
-The coverage gate is the long pole, and the reason is measurable: the suite starts eighteen
-Postgres containers, and every module costs about the same regardless of how much code it
-has, because what is paid for is container startup and not test logic. The modules therefore
-run in parallel -- locally that is 78 s instead of 171 s on a cold test cache. The remaining
-lever is bigger and not pulled yet: one container per *test* could be one per *package*,
-which is what the `Snapshot` and `Restore` helpers in `pkg/testutils` are for. The coverage report is uploaded as an
+The coverage gate is the long pole, and what it spends its time on is starting containers
+rather than running tests: every module costs about the same regardless of how much code it
+has. Two things address that, and only together were they enough:
+
+- **One container per package, not per test.** `TestMain` starts one PostgreSQL, migrates it
+  and takes a snapshot; every test gets that snapshot restored on cleanup, in milliseconds.
+  This took the suite from about seventy container startups to eighteen (`D-30`).
+- **The modules run in parallel**, bounded by `COVERAGE_JOBS`.
+
+The twelve startups that remain are in `pkg/database`, whose tests are about the database
+lifecycle itself -- connecting, migrating, failing to migrate -- and so want a fresh
+container. That is the next lever if it is ever needed. The coverage report is uploaded as an
 artifact of each run, including when the gate fails, which is when somebody actually needs
 to read it. The comment on the pull request and the README badges arrive with `PRD-25`,
 once decision `D-17` settles which tool publishes them.

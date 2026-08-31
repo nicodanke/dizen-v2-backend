@@ -11,6 +11,7 @@ package repository_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -23,30 +24,72 @@ import (
 	"github.com/nicodanke/dizen-v2-backend/services/mail-dispatcher/internal/repository"
 )
 
+// One container for the whole package, started once and restored between tests.
+//
+// The alternative -- a container per test -- is stronger isolation on paper and costs a
+// startup every time: ten tests here meant ten PostgreSQL containers, which is seconds on a
+// developer machine and minutes on a CI runner. A snapshot taken right after the migrations
+// and restored before each test gives the same empty, migrated schema in milliseconds, and
+// the isolation is the same because no test in this package runs in parallel.
 func TestMain(m *testing.M) {
 	if !testutils.DockerAvailable() {
 		os.Exit(0)
 	}
 
-	os.Exit(m.Run())
+	os.Exit(runPackage(m))
 }
 
-// liveRepo returns a repository over a migrated database.
+// runPackage owns the container's lifetime. It is separate from TestMain because os.Exit
+// does not run deferred functions, and a leaked container outlives the test run.
+func runPackage(m *testing.M) int {
+	ctx := context.Background()
+
+	pg, terminate, err := testutils.StartPostgres(ctx, testutils.WithDatabase("mail_dispatcher_db"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "integration setup: %v\n", err)
+
+		return 1
+	}
+
+	defer terminate()
+
+	// The schema comes from the real migrations, not from a hand-written CREATE TABLE: a
+	// schema retyped for the test would drift from what production applies, and these tests
+	// exist to catch exactly that kind of drift.
+	if err := database.Migrate(pg.URL, migrations.FS, migrations.Path, logger.Nop()); err != nil {
+		fmt.Fprintf(os.Stderr, "integration setup, migrating: %v\n", err)
+
+		return 1
+	}
+
+	// Taken after migrating, so restoring returns to a migrated and empty database.
+	if err := pg.SnapshotContext(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "integration setup: %v\n", err)
+
+		return 1
+	}
+
+	testDB = pg
+
+	return m.Run()
+}
+
+// testDB is the shared container. It is package state, which is what TestMain forces, and it
+// is only ever read through liveRepo.
+var testDB *testutils.Postgres
+
+// liveRepo returns a repository over the shared, migrated database.
 //
-// The schema comes from the real migrations, not from a hand-written CREATE TABLE: a schema
-// retyped for the test would drift from what production applies, and these tests exist to
-// catch exactly that kind of drift.
+// The snapshot is restored on cleanup, so every test starts from the same empty schema
+// whether the one before it passed or failed. Registering it here rather than in each test
+// is what keeps that guarantee from depending on anybody remembering.
 func liveRepo(t *testing.T) (*repository.Repository, *testutils.Postgres) {
 	t.Helper()
 	testutils.SkipIfNoDocker(t)
 
-	pg := testutils.SetupPostgres(t, testutils.WithDatabase("mail_dispatcher_db"))
+	t.Cleanup(func() { testDB.Restore(t) })
 
-	if err := database.Migrate(pg.URL, migrations.FS, migrations.Path, logger.Nop()); err != nil {
-		t.Fatalf("migrating: %v", err)
-	}
-
-	return repository.New(pg.Pool), pg
+	return repository.New(testDB.Pool), testDB
 }
 
 // sampleEvent is a typical outbox entry.

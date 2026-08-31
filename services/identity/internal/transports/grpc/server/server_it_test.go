@@ -12,6 +12,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -43,13 +44,50 @@ import (
 	"github.com/nicodanke/dizen-v2-backend/services/identity/internal/transports/grpc/server/handler"
 )
 
+// One container for the whole package, restored between tests. Eight tests here used to mean
+// eight PostgreSQL containers; the schema they need is the same one every time.
 func TestMain(m *testing.M) {
 	if !testutils.DockerAvailable() {
 		os.Exit(0)
 	}
 
-	os.Exit(m.Run())
+	os.Exit(runPackage(m))
 }
+
+// runPackage owns the container's lifetime, separately from TestMain because os.Exit does
+// not run deferred functions.
+func runPackage(m *testing.M) int {
+	ctx := context.Background()
+
+	pg, terminate, err := testutils.StartPostgres(ctx, testutils.WithDatabase("identity_db"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "integration setup: %v\n", err)
+
+		return 1
+	}
+
+	defer terminate()
+
+	// Migrations at startup, exactly as the container does (RF-7).
+	if err := database.Migrate(pg.URL, migrations.FS, migrations.Path, logger.Nop()); err != nil {
+		fmt.Fprintf(os.Stderr, "integration setup, migrating: %v\n", err)
+
+		return 1
+	}
+
+	if err := pg.SnapshotContext(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "integration setup: %v\n", err)
+
+		return 1
+	}
+
+	testDB = pg
+
+	return m.Run()
+}
+
+// testDB is the shared container, read only through newStack.
+var testDB *testutils.Postgres
 
 // stack is the service as a deployment runs it.
 type stack struct {
@@ -65,12 +103,12 @@ func newStack(t *testing.T, opts ...func(*grpcserver.Config)) *stack {
 	t.Helper()
 	testutils.SkipIfNoDocker(t)
 
-	pg := testutils.SetupPostgres(t, testutils.WithDatabase("identity_db"))
+	pg := testDB
 
-	// Migrations at startup, exactly as the container does (RF-7).
-	if err := database.Migrate(pg.URL, migrations.FS, migrations.Path, logger.Nop()); err != nil {
-		t.Fatalf("migrating: %v", err)
-	}
+	// Registered before the pool below, and t.Cleanup runs last-in-first-out, so the pool is
+	// closed before the snapshot is restored. Restoring drops the database, and it cannot be
+	// dropped while a connection to it is open.
+	t.Cleanup(func() { pg.Restore(t) })
 
 	db, err := database.Connect(t.Context(), database.Config{URL: pg.URL}, logger.Nop())
 	if err != nil {

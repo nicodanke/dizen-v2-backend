@@ -217,6 +217,12 @@ jobs:
       # and not test logic: eighteen Postgres containers, and six waits that overlap instead
       # of adding up.
       - name: Tests and the 70% gate
+        # Two at a time. The evidence so far says the total is dominated by how long a
+        # container takes to become ready on this runner rather than by contention, so this
+        # is a starting point to tune with the per-module timings the script now prints, not
+        # a tuned value.
+        env:
+          COVERAGE_JOBS: "2"
         run: make test-coverage
 
       - name: Browsable report

@@ -37,17 +37,27 @@ echo "==> running the tests with coverage (tags: ${TAGS:-none})"
 # One profile per module, merged afterwards: -coverpkg cannot span modules, so each module is
 # measured against its own packages plus pkg.
 #
-# The modules run in parallel, and the reason is measurable: the suite starts eighteen
-# Postgres containers, and every module costs about the same regardless of how much code it
-# has, because what is being paid for is container startup and not test logic. Sequentially
-# that is the sum of six waits; in parallel it is the longest one. Locally it takes the run
-# from about 171 s to about 49 s, and on a CI runner -- where the waits are longer and the
-# cores fewer -- the ratio is smaller but the saving is larger.
+# The modules run in parallel because what this suite spends its time on is starting
+# containers, not running tests: every module costs about the same regardless of how much
+# code it has. Sequentially that is the sum of the waits; in parallel it is the longest one.
+#
+# Parallelism alone was not enough. The number of startups is what dominates, and that was
+# cut from about seventy to eighteen by sharing one container per package (D-30). The twelve
+# that remain are in pkg/database, whose tests are about the database lifecycle itself.
 #
 # Each module gets its own profile and its own log; the logs are printed afterwards, in
 # module order, because interleaved output from six test binaries is unreadable. Set
 # COVERAGE_SEQUENTIAL=1 to get the old behaviour when that interleaving is hiding something.
-SEQUENTIAL="${COVERAGE_SEQUENTIAL:-}"
+# How many modules run at once. The bottleneck is container startup rather than CPU, so more
+# than the core count still helps -- but only up to the point where the Docker daemon and the
+# memory of the machine become the constraint, which on a two-core CI runner arrives early.
+# CI sets it explicitly; locally the default is the core count.
+JOBS="${COVERAGE_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
+
+# A test binary that hangs must say so while the job is still alive. This has to stay well
+# under the job timeout of the workflow: at the limit, `go test` panics and prints the stack
+# of every goroutine, which is the difference between "it hung" and "it hung here".
+GO_TEST_TIMEOUT="${COVERAGE_TEST_TIMEOUT:-12m}"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -59,53 +69,57 @@ while IFS= read -r dir; do
   MODULES+=("$dir")
 done < <(go list -m -f '{{.Dir}}')
 
+echo "==> ${#MODULES[@]} modules, ${JOBS} at a time, ${GO_TEST_TIMEOUT} per module"
+echo ""
+
+# Output is streamed with the module name on every line rather than collected and printed at
+# the end. Collecting reads better when everything works and is useless when it does not: a
+# run killed by the job timeout prints nothing at all, which is exactly the run whose output
+# was needed.
 run_module() {
-  local dir="$1" profile="$2" log="$3"
+  local dir="$1" profile="$2" rel="$3" status_file="$4" started
+
+  started="$SECONDS"
 
   ( cd "$dir" && go test \
       ${TAGS:+-tags="$TAGS"} \
       -coverpkg=./... \
       -covermode=atomic \
       -coverprofile="$profile" \
-      -timeout=30m \
-      ./... ) > "$log" 2>&1
+      -timeout="$GO_TEST_TIMEOUT" \
+      ./... ) 2>&1 | sed "s|^|[$rel] |"
+
+  local status="${PIPESTATUS[0]}"
+
+  echo "$status" > "$status_file"
+  printf '[%s] finished in %ss (exit %s)\n' "$rel" "$((SECONDS - started))" "$status"
 }
 
-PIDS=()
+RUNNING=0
 
 for index in "${!MODULES[@]}"; do
   dir="${MODULES[$index]}"
   rel="${dir#"$ROOT"/}"
 
-  if [ -n "$SEQUENTIAL" ]; then
-    printf '\033[1;34m==> %s\033[0m\n' "$rel"
+  run_module "$dir" "$WORK/profile.$index" "$rel" "$WORK/status.$index" &
 
-    # The status is captured from run_module itself. Reading $? after the `cat` below would
-    # report whether printing the log worked, which it always does.
-    status=0
-    run_module "$dir" "$WORK/profile.$index" "$WORK/log.$index" || status=$?
-    echo "$status" > "$WORK/status.$index"
-    continue
+  RUNNING=$((RUNNING + 1))
+
+  # A plain `wait -n` would be simpler but needs bash 4.3, and macOS ships 3.2. Waiting for
+  # the whole batch is coarser and works everywhere.
+  if [ "$RUNNING" -ge "$JOBS" ]; then
+    wait
+    RUNNING=0
   fi
-
-  run_module "$dir" "$WORK/profile.$index" "$WORK/log.$index" &
-  PIDS+=("$!")
 done
+
+wait
 
 FAILED=""
 
 for index in "${!MODULES[@]}"; do
   rel="${MODULES[$index]#"$ROOT"/}"
-
-  if [ -n "$SEQUENTIAL" ]; then
-    status="$(cat "$WORK/status.$index")"
-  else
-    status=0
-    wait "${PIDS[$index]}" || status=$?
-  fi
-
-  printf '\033[1;34m==> %s\033[0m\n' "$rel"
-  [ -f "$WORK/log.$index" ] && cat "$WORK/log.$index"
+  status="$(cat "$WORK/status.$index" 2>/dev/null || echo 1)"
 
   if [ "$status" != "0" ]; then
     FAILED="${FAILED} ${rel}"

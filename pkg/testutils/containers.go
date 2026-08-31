@@ -12,6 +12,7 @@ package testutils
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -56,19 +57,36 @@ type Postgres struct {
 	container *postgres.PostgresContainer
 }
 
-// SetupPostgres starts a PostgreSQL container and returns an open pool.
+// SetupPostgres starts a PostgreSQL container for one test and returns an open pool.
 //
-// The database is per test, not shared: a shared one makes tests order-dependent, and an
-// order-dependent suite is one that fails on CI and passes locally.
+// One container per test is the strongest isolation there is, and it costs seconds every
+// time. Use it where the test is about the database lifecycle itself -- connecting,
+// migrating, failing to migrate. For a package whose tests only need a migrated schema,
+// StartPostgres from TestMain plus Restore between tests does the same job for one startup
+// instead of ten.
 func SetupPostgres(t *testing.T, opts ...PostgresOption) *Postgres {
 	t.Helper()
 
+	pg, terminate, err := StartPostgres(context.Background(), opts...)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	t.Cleanup(terminate)
+
+	return pg
+}
+
+// StartPostgres starts a PostgreSQL container without a *testing.T, which is what makes it
+// usable from TestMain.
+//
+// The returned function terminates the container and closes the pool; it is the caller's to
+// invoke, because TestMain has no t.Cleanup and os.Exit does not run deferred functions.
+func StartPostgres(ctx context.Context, opts ...PostgresOption) (*Postgres, func(), error) {
 	settings := postgresSettings{image: PostgresImage, database: "dizen_test"}
 	for _, opt := range opts {
 		opt(&settings)
 	}
-
-	ctx := context.Background()
 
 	container, err := postgres.Run(ctx, settings.image,
 		postgres.WithDatabase(settings.database),
@@ -82,28 +100,39 @@ func SetupPostgres(t *testing.T, opts ...PostgresOption) *Postgres {
 		),
 	)
 	if err != nil {
-		t.Fatalf("starting PostgreSQL: %v", err)
+		return nil, nil, fmt.Errorf("starting PostgreSQL: %w", err)
 	}
 
-	registerTerminate(t, container)
+	terminate := func() {
+		if err := container.Terminate(context.WithoutCancel(ctx)); err != nil {
+			fmt.Fprintf(os.Stderr, "terminating the PostgreSQL container: %v\n", err)
+		}
+	}
 
 	url, err := container.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
-		t.Fatalf("reading the connection string: %v", err)
+		terminate()
+
+		return nil, nil, fmt.Errorf("reading the connection string: %w", err)
 	}
 
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
-		t.Fatalf("opening the pool: %v", err)
-	}
+		terminate()
 
-	t.Cleanup(pool.Close)
+		return nil, nil, fmt.Errorf("opening the pool: %w", err)
+	}
 
 	if err := pool.Ping(ctx); err != nil {
-		t.Fatalf("pinging the database: %v", err)
+		pool.Close()
+		terminate()
+
+		return nil, nil, fmt.Errorf("pinging the database: %w", err)
 	}
 
-	return &Postgres{URL: url, Pool: pool, container: container}
+	pg := &Postgres{URL: url, Pool: pool, container: container}
+
+	return pg, func() { pool.Close(); terminate() }, nil
 }
 
 // postgresSettings are the knobs SetupPostgres exposes.
@@ -133,22 +162,45 @@ func WithDatabase(name string) PostgresOption {
 func (p *Postgres) Snapshot(t *testing.T) {
 	t.Helper()
 
-	if err := p.container.Snapshot(context.Background()); err != nil {
-		t.Fatalf("taking the snapshot: %v", err)
+	if err := p.SnapshotContext(context.Background()); err != nil {
+		t.Fatalf("%v", err)
 	}
+}
+
+// SnapshotContext is Snapshot without a *testing.T, for TestMain.
+func (p *Postgres) SnapshotContext(ctx context.Context) error {
+	// The pool is reset first, for the same reason Restore does it: a snapshot copies the
+	// database as a template, and Postgres refuses to use one that still has a session on
+	// it. The pool holds one from the ping at startup.
+	p.Pool.Reset()
+
+	if err := p.container.Snapshot(ctx); err != nil {
+		return fmt.Errorf("taking the snapshot: %w", err)
+	}
+
+	return nil
 }
 
 // Restore returns the database to the last snapshot.
 func (p *Postgres) Restore(t *testing.T) {
 	t.Helper()
 
-	// The pool is closed first: restoring drops the database, and an open connection to it
+	if err := p.RestoreContext(context.Background()); err != nil {
+		t.Fatalf("%v", err)
+	}
+}
+
+// RestoreContext is Restore without a *testing.T.
+func (p *Postgres) RestoreContext(ctx context.Context) error {
+	// The pool is reset first: restoring drops the database, and an open connection to it
 	// makes the drop fail.
 	p.Pool.Reset()
 
-	if err := p.container.Restore(context.Background()); err != nil {
-		t.Fatalf("restoring the snapshot: %v", err)
+	if err := p.container.Restore(ctx); err != nil {
+		return fmt.Errorf("restoring the snapshot: %w", err)
 	}
+
+	return nil
 }
 
 // Redis is a running cache.

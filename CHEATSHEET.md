@@ -214,9 +214,15 @@ make commit-check   # Conventional Commits on this branch (RANGE= overrides)
 | `unit tests` | `go test -race`, no Docker | `make test` |
 | `coverage gate` | integration tests and the 70% threshold | `make test-coverage` |
 
-`make test-coverage` runs the six modules in parallel, since what the suite spends its time
-on is starting eighteen Postgres containers rather than running tests. Set
-`COVERAGE_SEQUENTIAL=1` when the interleaved output is hiding something.
+`make test-coverage` runs the modules in parallel, since what the suite spends its time on is
+starting containers rather than running tests. `COVERAGE_JOBS` bounds how many run at once
+(CI sets 2) and `COVERAGE_SEQUENTIAL=1` forces one at a time when the interleaved output is
+hiding something.
+
+Integration tests share one container per package: `TestMain` starts it, migrates it and
+snapshots it, and `liveRepo`/`newStack` restore that snapshot after every test. **A new
+integration test gets an empty, migrated schema for free** -- and must not call `t.Parallel()`,
+because the container is shared.
 
 `static analysis` also runs `make deploy-check`, which parses
 `deploy/docker-compose.prod.yml` and fails if it reads a variable that
