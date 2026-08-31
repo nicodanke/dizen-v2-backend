@@ -12,9 +12,9 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main, develop]
+    branches: [main, staging]
 
-# A second push to the same branch makes the first run pointless. On main and develop it is
+# A second push to the same branch makes the first run pointless. On main and staging it is
 # not cancelled: those runs are what the deployment and the contract publication key off.
 #
 # The consequence is worth knowing before it confuses somebody: a superseded run ends with
@@ -23,7 +23,7 @@ on:
 # cancelled here and did not fail.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/staging' }}
 
 permissions:
   contents: read

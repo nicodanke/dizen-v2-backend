@@ -244,8 +244,9 @@ scripts/branch-protection.sh --dry-run   # the protection the two branches shoul
 ## Deployment
 
 `deploy/docker-compose.prod.yml` is what Dokploy runs, in two separate projects
-(`dizen-staging`, `dizen-production`) that share no database, no domain and no variable.
-`deploy/dokploy.env.example` is the inventory of those variables, versioned empty.
+(`dizen-v2-staging`, `dizen-v2-production`) that share no domain, no database and no secret.
+`deploy/dokploy.env.example` is the inventory of variables, versioned empty; the values live
+in Doppler.
 
 ```bash
 make deploy-check    # the compose parses and every variable it reads is documented
@@ -253,29 +254,29 @@ make deploy-check    # the compose parses and every variable it reads is documen
 
 | | Staging | Production |
 |---|---|---|
-| Deploys from | push to `develop` | tag `v*` on `main` |
+| Deploys from | push to `staging` | tag `v*` on `main` |
+| Hosts | `*.staging.v2.dizen.pro` | `*.v2.dizen.pro` |
 | Basic authentication at the edge | yes, on the REST hosts | no |
 | Valhalla and planetiler | yes, behind the `authoring` and `tiles` profiles | no |
 | Trace sampling | 1.0 | a fraction |
 
-```bash
-make backup-drill    # the monthly restore drill: dump, upload, restore, compare
-```
+The data stores are **not** in this compose: Postgres, Redis and RabbitMQ are managed outside
+it and arrive as connection strings, one per service.
 
-The drill runs the real backup code against throwaway containers and fails if a single row
-comes back different. It is the restore test RF-9 asks for, and the reason it is a command
-is that a documented procedure nobody runs produces a document, not a tested backup.
+Four things to know before touching it:
 
-Two things to know before touching it:
-
+- **v2 runs next to v1**, which owns `api.dizen.pro`. Every Traefik name carries the
+  environment and `v2` (`staging-v2-identity-rest`) because both stacks share one Traefik,
+  and two routers with the same name overwrite each other in silence.
 - **A bcrypt hash in `BASIC_AUTH_USERS` needs every `$` doubled.** `$` is what Compose
   interpolates, so an unescaped hash arrives mutilated and the login never works.
 - **The gRPC services need `scheme=h2c`.** Without it Traefik downgrades the internal leg to
-  HTTP/1.1 and every gRPC call fails with an unreadable framing error. Verify it against the
-  real domain:
+  HTTP/1.1 and every gRPC call fails with an unreadable framing error.
+- **Secrets come from Doppler**, referenced in Dokploy as `${{vault.doppler-stg.NAME}}`.
+  Locally `make up` runs under `doppler run` when the CLI is configured.
 
 ```bash
-grpcurl -d '{}' grpc.dizen.app:443 dizen.identity.v1.HealthService/HealthPing
+grpcurl -d '{}' grpc.staging.v2.dizen.pro:443 dizen.identity.v1.HealthService/HealthPing
 ```
 
 ---

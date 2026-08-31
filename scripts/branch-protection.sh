@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Applies the branch protection of PRD-18 RF-11 and RF-12 to main and develop.
+# Applies the branch protection of PRD-18 RF-11 and RF-12 to main and staging.
 #
 # The threshold and the pipeline are only real if the merge button respects them: a required
 # check that is not marked as required is a suggestion. This script is what marks them, and
@@ -35,7 +35,7 @@ CHECKS=(
   "coverage gate"
 )
 
-BRANCHES=(main develop)
+BRANCHES=(main staging)
 
 # Zero by default because the team is one person and GitHub does not let anybody approve
 # their own pull request: asking for one approval would make it impossible to merge. The

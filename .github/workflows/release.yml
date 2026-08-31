@@ -1,7 +1,7 @@
 # Production release (PRD-18 RF-11, RF-12, RF-12b).
 #
-# A tag `vX.Y.Z` on main is the only thing that deploys to production. Staging follows
-# develop and is wired in Dokploy (RF-4); this workflow is the production half, and it
+# A tag `vX.Y.Z` on main is the only thing that deploys to production. Staging follows the
+# `staging` branch (RF-4); this workflow is the production half, and it
 # deliberately does not depend on dizen-v2-mobile or dizen-v2-web: the backend goes first,
 # always, because the contract is additive and a published app has to keep working against
 # a newer backend (RF-12b, 01 section 3.2).

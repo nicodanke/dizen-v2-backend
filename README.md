@@ -138,7 +138,7 @@ breaking` enforces it. When a break is unavoidable, a `v2` is created and both c
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request and on every push to `main` and
-`develop`. There are no path filters and no change detection: if this repository changed,
+`staging`. There are no path filters and no change detection: if this repository changed,
 the whole pipeline runs. That is the concrete advantage of three separate repositories -- a
 push to `dizen-v2-mobile` costs nothing here.
 
@@ -226,7 +226,10 @@ guaranteed. The release workflow depends on neither of the other two repositorie
 
 ### Branches and secrets
 
-`main` is production and `develop` is staging; work happens in `feature/*` and `hotfix/*`.
+`main` is the trunk and `staging` is what the staging environment runs; work happens in
+`feature/*` and `hotfix/*`. The deployment branch is named after the environment it deploys
+because the mapping is exactly one to one and CI enforces it -- `main` keeps its name because
+production is cut by a `v*` tag, not by pushing to it (`D-34`).
 Both protected branches require the six jobs above as status checks --
 `scripts/branch-protection.sh` applies that with the GitHub CLI, and `--dry-run` shows what
 it would send without touching anything.
@@ -243,11 +246,9 @@ signing credentials, and `dizen-v2-mobile` never sees a database URL (`PRD-18` R
 ## Deployment
 
 [`deploy/docker-compose.prod.yml`](deploy/docker-compose.prod.yml) is what Dokploy runs, and
-one file serves both environments: `dizen-staging` and `dizen-production` are two separate
-Dokploy projects with their own databases, domains and variables, and nothing shared between
-them. Everything that differs is a variable;
-[`deploy/dokploy.env.example`](deploy/dokploy.env.example) names every one of them, empty,
-and the values live only in Dokploy (hard rule 6).
+one file serves both environments: `dizen-v2-staging` and `dizen-v2-production` are two
+separate Dokploy projects with their own domains, their own databases and their own secrets,
+sharing nothing. Everything that differs is a variable.
 
 ```bash
 make deploy-check   # the compose parses and every variable it reads is documented
@@ -257,95 +258,112 @@ That check is in CI. Compose only *warns* about a variable it cannot resolve and
 with an empty string, which on a server is an empty database password or a router with no
 host, so the warning is turned into a failure.
 
+### Secrets: Doppler
+
+There is no `.env` on the server and none in this repository.
+[`deploy/dokploy.env.example`](deploy/dokploy.env.example) names every variable, empty, and
+the values live in Doppler:
+
+```
+Doppler project `dizen-v2-backend`
+  ├── config `dev`  ->  `doppler run -- ...`      the developer machine
+  ├── config `stg`  ->  provider `doppler-stg`    ->  dizen-v2-staging
+  └── config `prd`  ->  provider `doppler-prd`    ->  dizen-v2-production
+```
+
+Dokploy reads Doppler through a **Service Token** (`dp.st.`), which is read-only and scoped
+to one project and one config: a leaked token exposes that config and nothing else. One
+provider per config, so staging and production do not even share the token that reads their
+secrets. In the Dokploy environment variables each secret is referenced as
+`${{vault.doppler-stg.IDENTITY_DATABASE_URL}}`; the non-secret variables are written
+literally.
+
+Locally, `make up` runs the compose under `doppler run` when the CLI is configured and falls
+back to the committed development defaults when it is not, so a fresh clone still works. What
+Doppler is actually protecting on a laptop is the JWT signing key that `make jwt-key`
+otherwise writes to a file.
+
 ### What runs
 
-Five services, five Postgres (one per service, never shared), Redis and RabbitMQ. The
-databases publish no ports and are not on the network Traefik can see: they are reachable
-only from the private bridge, and administrative access is over an SSH tunnel. Every
-container carries an explicit CPU and memory limit so one service cannot starve the rest.
+Five services and the backup container. **The data stores are not in this compose**: Postgres,
+Redis and RabbitMQ are managed outside it and arrive as connection strings, the same way the
+v1 stack does it (`D-32`). One database and one credential per service, no cross-access.
+
+Every container carries an explicit CPU and memory limit, which matters more here than it
+would on an empty machine: this VPS also runs v1.
 
 ### Routing
 
-| Host | Goes to |
-|---|---|
-| `api.dizen.app` | the REST gateway, path-routed: `/v1/identity/*`, `/v1/tours/*`, `/v1/booking/*` |
-| `grpc.dizen.app` | gRPC for the mobile app, routed by proto package, **h2c end to end** |
-| `admin-api.dizen.app` | the `admin` service, REST only -- the dashboard does not speak gRPC |
+| | Staging | Production |
+|---|---|---|
+| REST | `api.staging.v2.dizen.pro` | `api.v2.dizen.pro` |
+| gRPC | `grpc.staging.v2.dizen.pro` | `grpc.v2.dizen.pro` |
+| Dashboard API | `admin-api.staging.v2.dizen.pro` | `admin-api.v2.dizen.pro` |
 
-Both rules rest on one convention: **the first segment after `/v1/` and the proto package
-both carry the service name**. That is what keeps the routing a constant instead of a table
-that grows with every RPC, and every new `google.api.http` annotation has to respect it.
-Only `/v1/` is published; `/livez`, `/readyz` and `/metrics` answer on the same port and stay
-on the internal network.
+v2 lives under its own subdomain because **v1 already owns `api.dizen.pro` and
+`grpc-*.dizen.pro`** and cannot be turned off yet (`D-31`). The cutover, when v1 is retired,
+is a DNS and host-rule change and nothing else.
+
+The REST host is path-routed and the gRPC host is routed by proto package, both resting on
+one convention: **the first segment after `/v1/` and the proto package both carry the service
+name** (`D-24`). That keeps the routing a constant instead of a table that grows with every
+RPC, and every new `google.api.http` annotation has to respect it. Only `/v1/` is published;
+`/livez`, `/readyz` and `/metrics` answer on the same port and are reachable only from inside.
 
 `scheme=h2c` on the gRPC services is the line this kind of deployment most often gets wrong:
 without it Traefik downgrades the internal leg to HTTP/1.1 and every call dies with an
-unreadable framing error. It is verified with `grpcurl` against the public domain, not by
-hand:
+unreadable framing error. The v1 stack sets the same label for the same reason. Verify it
+against the real domain rather than by hand:
 
 ```bash
-grpcurl -d '{}' grpc.dizen.app:443 dizen.identity.v1.HealthService/HealthPing
+grpcurl -d '{}' grpc.staging.v2.dizen.pro:443 dizen.identity.v1.HealthService/HealthPing
 ```
 
-### Authoring: Valhalla and the tiles
+### Living next to v1
 
-Valhalla routes only while a tour is being authored (`07` section 3.2), and `planetiler`
-generates the `.pmtiles` of a region. Neither is reachable from the internet -- they are not
-on the network Traefik sees -- and both are behind compose profiles, so they run in staging
-and not in production: the dashboard is their only user, and a re-import must not compete for
-CPU with real traffic.
+Both stacks share one Traefik and one `dokploy-network`, so every name that Traefik sees is
+prefixed with the environment and with `v2`: `staging-v2-identity-rest`, never
+`identity-rest`. Two routers with the same name overwrite each other silently, and the one
+that loses is whichever Docker reports second.
 
-```bash
-docker compose --profile authoring up -d      # Valhalla
-docker compose --profile tiles run --rm planetiler   # one-shot, generates a .pmtiles
-```
+| | v1 | v2 | Collide? |
+|---|---|---|---|
+| Hosts | `api.dizen.pro`, `grpc-*.dizen.pro` | `*.v2.dizen.pro` | no |
+| Traefik routers | `user-prod`, `booking-staging` | `production-v2-identity-rest` | no |
+| Container names | explicit (`user-service-prod`) | generated (`dizen-v2-staging-identity-1`) | no |
+| Published ports | none | none | no |
+| Networks | `dokploy-network` | `dokploy-network` **plus** a private `internal` | no |
 
-### Backups
+The private network is the one real improvement over v1: v2 service-to-service gRPC and
+Valhalla never touch the shared network, so they are not reachable from the v1 containers.
+`internal` is per project, so staging and production get one each.
 
-A daily dump of the five databases goes to a bucket **outside this server**, keeping 7
-daily, 4 weekly and 3 monthly (`RF-9`). It runs in its own container rather than as a
-Dokploy database backup, because these databases belong to a compose stack and Dokploy can
-only back up what it created.
+### Bringing it up
 
-```bash
-docker compose run --rm backup backup    # one run now
-docker compose run --rm backup verify    # what is stored
-docker compose run --rm backup restore   # lists what can be restored
-```
+**Staging first, and it is not a formality**: it is the same compose, the same image build and
+the same Traefik that production will use, so anything structurally wrong shows up there.
 
-The dumps are in `pg_dump` custom format, so each one is verified as readable before being
-uploaded: "the backup ran" and "the backup can be restored" are not the same claim. A run
-that fails on any database uploads nothing, because a partial set is worse than none -- it
-looks like a backup.
+1. Create the Doppler configs and the Dokploy provider, and the databases outside the compose.
+2. Point the DNS of the three staging hosts at the VPS.
+3. Create the `dizen-v2-staging` project in Dokploy, pointed at this repository and
+   `deploy/docker-compose.prod.yml`, with `DIZEN_ENV=staging`.
+4. Deploy, and check in this order: the containers are `ready` (migrations applied, `RF-7`),
+   `/readyz` answers through the internal network, the REST host answers over TLS, and
+   `grpcurl` answers on the gRPC host (acceptance criterion 3).
+5. Watch what the VPS actually costs with both stacks up, and adjust the limits before
+   repeating the four steps for production with `DIZEN_ENV=production`.
 
-`restore` writes nothing without `--yes`. It drops and recreates every object in the target
-database, and the moment it gets run is an incident, which is when a typo is most likely.
-
-**The drill is a command, not a paragraph:**
-
-```bash
-make backup-drill
-```
-
-It builds the backup image and runs the whole path against real containers -- a database
-with data, MinIO standing in for R2, a dump, an upload, a restore into an *empty* database,
-and a row-by-row comparison -- plus the retention rules. Run it monthly, which is the
-documented restore test `RF-9` asks for, and after any change under `deploy/backup/`. It
-touches no real environment: its own network, its own containers, its own bucket, all
-removed on exit.
-
-Penpot (`design.dizen.app`) is deployed as its own Dokploy application and is not in this
-compose, so it is **not covered yet**: `RF-9` includes it, and losing the design files is as
-expensive as losing the data. Adding it is a `DSN_PENPOT` in `BACKUP_DATABASES` plus its
-file volume, once that application exists.
+**The backend deploys before the apps, always** (`01` section 3.2): contract changes are
+additive, so a published app keeps working against a newer backend, and the reverse is not
+guaranteed.
 
 ### Known gap
 
 The rolling update of `RNF-2` is **not** achieved by plain Compose: `docker compose up`
-recreates a container rather than holding the old one until the new one answers `/readyz`,
-so a deployment has a short window of refused connections. Closing it needs either Dokploy's
+recreates a container rather than holding the old one until the new one answers `/readyz`, so
+a deployment has a short window of refused connections. Closing it needs either Dokploy's
 Swarm-backed application deployments or a second replica behind Traefik. It is written down
-here rather than assumed, and is tracked as decision `D-25`.
+here rather than assumed, and tracked as decision `D-25`.
 
 ## Hard rules
 

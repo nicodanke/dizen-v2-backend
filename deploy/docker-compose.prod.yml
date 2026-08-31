@@ -1,29 +1,28 @@
 # Production and staging deployment (PRD-18 RF-3, RF-3b, RF-5, RF-6, RF-10).
 #
 # One file for both environments. RF-2 asks for two separate Dokploy projects -- their own
-# databases, their own domains, their own variables, nothing shared -- and that is exactly
-# what this file expresses: everything that differs between them is a variable, and the
-# variables live in Dokploy, never here (RF-8, hard rule 6). `deploy/dokploy.env.example`
-# lists every one of them.
+# databases, their own domains, their own variables, nothing shared -- and that is what this
+# file expresses: everything that differs is a variable, and the variables live in Dokploy,
+# backed by Doppler (RF-8, hard rule 6). `deploy/dokploy.env.example` is the inventory.
 #
 # What this file assumes about Dokploy:
 #   - it runs Traefik and owns the certificates, on the external `dokploy-network`;
-#   - it builds on the server from this repository, so `build.context` is the repository
-#     root, the same as the development compose;
-#   - it sets the variables of each project before running `docker compose up`.
+#   - it builds on the server from this repository, so `build.context` is the repository root;
+#   - the data stores are NOT here: Postgres, Redis and RabbitMQ are managed outside this
+#     compose and arrive as connection strings (D-32), the same way the v1 stack does it.
 #
-# Every name that Traefik sees is prefixed with ${DIZEN_ENV}: staging and production share
-# one Traefik instance when they live on the same server, and two routers with the same
-# name silently overwrite each other.
+# Every name Traefik sees is prefixed with ${DIZEN_ENV}. The v1 stack shares this Traefik and
+# this network, so a router named `identity-rest` would be one name away from a collision;
+# `staging-identity-rest` is not.
 
-name: dizen-${DIZEN_ENV}
+name: dizen-v2-${DIZEN_ENV}
 
 # ---------------------------------------------------------------------------
 # Shared fragments
 # ---------------------------------------------------------------------------
 
-# Bounded logs. The risk table of PRD-18 lists a full disk from logs and metrics; this is
-# the half of the answer that belongs to the containers.
+# Bounded logs. The risk table of PRD-18 lists a full disk from logs and metrics; this is the
+# half that belongs to the containers.
 x-logging: &logging
   logging:
     driver: json-file
@@ -37,9 +36,12 @@ x-service-defaults: &service-defaults
   # Long enough for the graceful shutdown of 15 s (SHUTDOWN_TIMEOUT) to finish draining
   # before Docker sends SIGKILL.
   stop_grace_period: 30s
-  networks: [internal]
-  # RF-3: limits per container, so one service cannot starve the rest. The Go services are
-  # small and predictable; what they must not do is grow unbounded on a leak.
+  # Both networks, and each for one reason: `internal` carries v2-to-v2 gRPC and Valhalla,
+  # `dokploy-network` is where Traefik reaches the routed services and where the managed
+  # data stores live. A service that needs a database needs the second one.
+  networks: [internal, dokploy-network]
+  # RF-3: limits per container, so one service cannot starve the rest -- and this VPS also
+  # runs the v1 stack, so the ceiling matters more than it would on an empty machine.
   deploy:
     resources:
       limits:
@@ -57,11 +59,13 @@ x-service-env: &service-env
   # golang-migrate takes. A failed migration fails the start, the container never becomes
   # ready, and the deployment stops without touching the running version.
   DATABASE_RUN_MIGRATIONS: "true"
-  AMQP_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
-  AMQP_EXCHANGE: dizen.events
-  REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-  # Empty until PRD-18 RF-14 deploys the collector; an empty endpoint disables exporting
-  # rather than retrying against nothing.
+  # Managed outside this compose (D-32). One credential per service, so a leaked one exposes
+  # a single domain (hard rule 2).
+  REDIS_URL: ${REDIS_URL}
+  AMQP_URL: ${AMQP_URL}
+  AMQP_EXCHANGE: ${AMQP_EXCHANGE:-dizen.events}
+  # Empty until RF-14 deploys the collector; an empty endpoint disables exporting rather
+  # than retrying against nothing.
   OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
   TRACE_SAMPLE_RATIO: ${TRACE_SAMPLE_RATIO:-0.1}
   MIN_CLIENT_API_VERSION: ${MIN_CLIENT_API_VERSION:-}
@@ -74,210 +78,39 @@ x-build-args: &build-args
   COMMIT: ${COMMIT:-unknown}
   BUILD_DATE: ${BUILD_DATE:-unknown}
 
-x-postgres-defaults: &postgres-defaults
-  <<: *logging
-  restart: unless-stopped
-  networks: [internal]
-  # No `ports`: the databases are reachable only from the internal network. Administrative
-  # access is over an SSH tunnel (PRD-18 section 5).
-  stop_grace_period: 1m
-  deploy:
-    resources:
-      limits:
-        cpus: "1.0"
-        memory: 384M
-      reservations:
-        memory: 128M
+# Traefik labels shared by every routed service would be nice to factor out, but a YAML
+# anchor cannot interpolate the service name into a label key. They are written per service.
 
 networks:
-  # Private to this project. Nothing here is published to the host, and staging and
-  # production get one each because the project name is part of the network name.
+  # Private to this project, and the project name carries ${DIZEN_ENV}, so staging and
+  # production get one each. This is what keeps v2 service-to-service traffic off the shared
+  # network the v1 stack lives on.
   internal:
     driver: bridge
 
-  # Created by Dokploy, shared with its Traefik. Only the services that answer a public
-  # domain join it; a database that is on it is a database that can be reached from the
-  # edge.
+  # Created by Dokploy. Traefik reaches the routed services here, and the managed Postgres,
+  # Redis and RabbitMQ are here too.
   dokploy-network:
     external: true
 
 volumes:
-  identity-data:
-  tours-data:
-  booking-data:
-  admin-data:
-  mail-data:
-  redis-data:
-  rabbitmq-data:
   valhalla-tiles:
 
 services:
   # =========================================================================
-  # Databases: one per service, never shared (hard rule 2)
-  # =========================================================================
-  identity-db:
-    <<: *postgres-defaults
-    image: postgres:18.6-alpine
-    environment:
-      POSTGRES_USER: identity
-      POSTGRES_PASSWORD: ${IDENTITY_DB_PASSWORD}
-      POSTGRES_DB: identity_db
-    volumes: [identity-data:/var/lib/postgresql]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U identity -d identity_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  tours-db:
-    <<: *postgres-defaults
-    # PostGIS only here (01 section 5). It carries the geography columns and the GiST
-    # indexes, so it also gets the largest share of memory of the five.
-    image: imresamu/postgis:18-3.6-alpine
-    environment:
-      POSTGRES_USER: tours
-      POSTGRES_PASSWORD: ${TOURS_DB_PASSWORD}
-      POSTGRES_DB: tours_db
-    volumes: [tours-data:/var/lib/postgresql]
-    deploy:
-      resources:
-        limits:
-          cpus: "1.5"
-          memory: 768M
-        reservations:
-          memory: 256M
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tours -d tours_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  booking-db:
-    <<: *postgres-defaults
-    image: postgres:18.6-alpine
-    environment:
-      POSTGRES_USER: booking
-      POSTGRES_PASSWORD: ${BOOKING_DB_PASSWORD}
-      POSTGRES_DB: booking_db
-    volumes: [booking-data:/var/lib/postgresql]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U booking -d booking_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  admin-db:
-    <<: *postgres-defaults
-    image: postgres:18.6-alpine
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: ${ADMIN_DB_PASSWORD}
-      POSTGRES_DB: admin_db
-    volumes: [admin-data:/var/lib/postgresql]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d admin_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  mail-db:
-    <<: *postgres-defaults
-    image: postgres:18.6-alpine
-    environment:
-      POSTGRES_USER: mail
-      POSTGRES_PASSWORD: ${MAIL_DB_PASSWORD}
-      POSTGRES_DB: mail_db
-    volumes: [mail-data:/var/lib/postgresql]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mail -d mail_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  # =========================================================================
-  # Shared infrastructure
-  # =========================================================================
-  redis:
-    <<: *logging
-    image: redis:8-alpine
-    restart: unless-stopped
-    networks: [internal]
-    # A hard memory ceiling inside Redis as well as on the container: reaching the container
-    # limit gets the process killed, reaching maxmemory gets a key evicted. Redis holds
-    # cache and rate-limit counters (01 section 5), and losing the coldest key is the
-    # correct outcome for both.
-    command:
-      - redis-server
-      - --requirepass
-      - ${REDIS_PASSWORD}
-      - --appendonly
-      - "yes"
-      - --maxmemory
-      - 192mb
-      - --maxmemory-policy
-      - allkeys-lru
-    volumes: [redis-data:/data]
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 256M
-        reservations:
-          memory: 64M
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep -q PONG"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-
-  rabbitmq:
-    <<: *logging
-    image: rabbitmq:4-alpine
-    restart: unless-stopped
-    networks: [internal]
-    # The management image and its panel are deliberately not used here: it is one more
-    # HTTP surface, and the queues are inspected over an SSH tunnel when something needs
-    # inspecting.
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-    volumes: [rabbitmq-data:/var/lib/rabbitmq]
-    deploy:
-      resources:
-        limits:
-          cpus: "0.75"
-          memory: 512M
-        reservations:
-          memory: 128M
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 60s
-
-  # =========================================================================
   # Services
   #
-  # Routing, for all of them (RF-5, RF-6):
+  # Routing (RF-5, RF-6):
   #
   #   REST   ${API_HOST}/v1/<service>/...      -> port 8080, plain HTTP
   #   gRPC   ${GRPC_HOST}  /dizen.<svc>.v1...  -> port 9090, h2c end to end
   #
-  # Both rules lean on one convention: the first segment after /v1/ and the proto package
-  # both carry the service name. That is what makes the routing a constant instead of a
-  # table that grows with every RPC, and every new http annotation has to respect it.
+  # Both rules rest on one convention: the first segment after /v1/ and the proto package
+  # both carry the service name (D-24). That keeps the routing a constant instead of a table
+  # that grows with every RPC, and every new google.api.http annotation has to respect it.
   #
-  # Only /v1/ is published. /livez, /readyz and /metrics answer on the same port and stay
-  # on the internal network, where the probes and Prometheus reach them.
+  # Only /v1/ is published. /livez, /readyz and /metrics answer on the same port and are
+  # reachable only from inside.
   # =========================================================================
   identity:
     <<: *service-defaults
@@ -286,55 +119,50 @@ services:
       dockerfile: services/identity/Dockerfile
       target: production
       args: *build-args
-    networks: [internal, dokploy-network]
     environment:
       <<: *service-env
       SERVICE_NAME: identity
-      DATABASE_URL: postgres://identity:${IDENTITY_DB_PASSWORD}@identity-db:5432/identity_db?sslmode=disable
+      DATABASE_URL: ${IDENTITY_DATABASE_URL}
       REDIS_NAMESPACE: identity
-      # identity is the only service that issues tokens, so it is the only one that holds
-      # a private key (01 section 6).
+      # identity is the only service that issues tokens, so it is the only one that holds a
+      # private key (01 section 6).
       JWT_PRIVATE_KEY_PEM: ${JWT_PRIVATE_KEY_PEM}
-    depends_on:
-      identity-db: {condition: service_healthy}
-      redis: {condition: service_healthy}
-      rabbitmq: {condition: service_healthy}
     labels:
       - traefik.enable=true
-      # The container is on two networks; without this Traefik may pick the internal one
-      # and route to an address it cannot reach.
+      # The container is on two networks; without this Traefik may pick the internal one and
+      # route to an address it cannot reach.
       - traefik.docker.network=dokploy-network
 
-      - traefik.http.routers.${DIZEN_ENV}-identity-rest.rule=Host(`${API_HOST}`) && PathPrefix(`/v1/identity/`)
-      - traefik.http.routers.${DIZEN_ENV}-identity-rest.entrypoints=websecure
-      - traefik.http.routers.${DIZEN_ENV}-identity-rest.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
-      - traefik.http.routers.${DIZEN_ENV}-identity-rest.middlewares=${DIZEN_ENV}-secure-headers@docker${EXTRA_MIDDLEWARES:-}
-      - traefik.http.routers.${DIZEN_ENV}-identity-rest.service=${DIZEN_ENV}-identity-rest
-      - traefik.http.services.${DIZEN_ENV}-identity-rest.loadbalancer.server.port=8080
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-rest.rule=Host(`${API_HOST}`) && PathPrefix(`/v1/identity/`)
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-rest.entrypoints=websecure
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-rest.tls=true
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-rest.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-rest.middlewares=${DIZEN_ENV}-v2-secure-headers@docker${EXTRA_MIDDLEWARES:-}
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-rest.service=${DIZEN_ENV}-v2-identity-rest
+      - traefik.http.services.${DIZEN_ENV}-v2-identity-rest.loadbalancer.server.port=8080
 
       # RF-6: h2c on the internal leg. The gRPC server speaks HTTP/2 without TLS, Traefik
-      # terminates TLS at the edge and forwards HTTP/2 in the clear over the private
-      # network. Without `scheme=h2c` Traefik downgrades to HTTP/1.1 and every call fails
-      # with an unreadable framing error; this is the line that this deployment most often
-      # gets wrong, which is why acceptance criterion 3 verifies it with grpcurl instead of
-      # trusting it.
-      - traefik.http.routers.${DIZEN_ENV}-identity-grpc.rule=Host(`${GRPC_HOST}`) && PathRegexp(`^/dizen\.identity\.v1\.`)
-      - traefik.http.routers.${DIZEN_ENV}-identity-grpc.entrypoints=websecure
-      - traefik.http.routers.${DIZEN_ENV}-identity-grpc.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
-      - traefik.http.routers.${DIZEN_ENV}-identity-grpc.service=${DIZEN_ENV}-identity-grpc
-      - traefik.http.services.${DIZEN_ENV}-identity-grpc.loadbalancer.server.port=9090
-      - traefik.http.services.${DIZEN_ENV}-identity-grpc.loadbalancer.server.scheme=h2c
+      # terminates TLS at the edge and forwards HTTP/2 in the clear over the private network.
+      # Without `scheme=h2c` Traefik downgrades to HTTP/1.1 and every call fails with an
+      # unreadable framing error. The v1 stack sets the same label for the same reason.
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-grpc.rule=Host(`${GRPC_HOST}`) && PathRegexp(`^/dizen\.identity\.v1\.`)
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-grpc.entrypoints=websecure
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-grpc.tls=true
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-grpc.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-grpc.service=${DIZEN_ENV}-v2-identity-grpc
+      - traefik.http.services.${DIZEN_ENV}-v2-identity-grpc.loadbalancer.server.port=9090
+      - traefik.http.services.${DIZEN_ENV}-v2-identity-grpc.loadbalancer.server.scheme=h2c
 
       # Declared once, on this container, and referenced by every router of the project.
-      - traefik.http.middlewares.${DIZEN_ENV}-secure-headers.headers.stsSeconds=31536000
-      - traefik.http.middlewares.${DIZEN_ENV}-secure-headers.headers.stsIncludeSubdomains=true
-      - traefik.http.middlewares.${DIZEN_ENV}-secure-headers.headers.contentTypeNosniff=true
-      - traefik.http.middlewares.${DIZEN_ENV}-secure-headers.headers.frameDeny=true
-      - traefik.http.middlewares.${DIZEN_ENV}-secure-headers.headers.referrerPolicy=strict-origin-when-cross-origin
-      # RF-5: staging carries an extra basic authentication. It is attached through
+      - traefik.http.middlewares.${DIZEN_ENV}-v2-secure-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.${DIZEN_ENV}-v2-secure-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.${DIZEN_ENV}-v2-secure-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.${DIZEN_ENV}-v2-secure-headers.headers.frameDeny=true
+      - traefik.http.middlewares.${DIZEN_ENV}-v2-secure-headers.headers.referrerPolicy=strict-origin-when-cross-origin
+      # RF-5: staging carries an extra basic authentication, attached through
       # EXTRA_MIDDLEWARES, which is empty in production. The users come from a variable
-      # because a htpasswd line is a credential and does not belong in the repository.
-      - traefik.http.middlewares.${DIZEN_ENV}-basicauth.basicauth.users=${BASIC_AUTH_USERS:-}
+      # because a htpasswd line is a credential.
+      - traefik.http.middlewares.${DIZEN_ENV}-v2-basicauth.basicauth.users=${BASIC_AUTH_USERS:-}
 
   tours:
     <<: *service-defaults
@@ -343,36 +171,33 @@ services:
       dockerfile: services/tours/Dockerfile
       target: production
       args: *build-args
-    networks: [internal, dokploy-network]
     environment:
       <<: *service-env
       SERVICE_NAME: tours
-      DATABASE_URL: postgres://tours:${TOURS_DB_PASSWORD}@tours-db:5432/tours_db?sslmode=disable
+      DATABASE_URL: ${TOURS_DATABASE_URL}
       REDIS_NAMESPACE: tours
-      # Only tours talks to the router, and only during authoring (07 section 3.2). Empty
-      # in production, where Valhalla does not run.
+      # Only tours talks to the router, and only during authoring (07 section 3.2). Empty in
+      # production, where Valhalla does not run.
       VALHALLA_URL: ${VALHALLA_URL:-}
-    depends_on:
-      tours-db: {condition: service_healthy}
-      redis: {condition: service_healthy}
-      rabbitmq: {condition: service_healthy}
     labels:
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
 
-      - traefik.http.routers.${DIZEN_ENV}-tours-rest.rule=Host(`${API_HOST}`) && PathPrefix(`/v1/tours/`)
-      - traefik.http.routers.${DIZEN_ENV}-tours-rest.entrypoints=websecure
-      - traefik.http.routers.${DIZEN_ENV}-tours-rest.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
-      - traefik.http.routers.${DIZEN_ENV}-tours-rest.middlewares=${DIZEN_ENV}-secure-headers@docker${EXTRA_MIDDLEWARES:-}
-      - traefik.http.routers.${DIZEN_ENV}-tours-rest.service=${DIZEN_ENV}-tours-rest
-      - traefik.http.services.${DIZEN_ENV}-tours-rest.loadbalancer.server.port=8080
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-rest.rule=Host(`${API_HOST}`) && PathPrefix(`/v1/tours/`)
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-rest.entrypoints=websecure
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-rest.tls=true
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-rest.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-rest.middlewares=${DIZEN_ENV}-v2-secure-headers@docker${EXTRA_MIDDLEWARES:-}
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-rest.service=${DIZEN_ENV}-v2-tours-rest
+      - traefik.http.services.${DIZEN_ENV}-v2-tours-rest.loadbalancer.server.port=8080
 
-      - traefik.http.routers.${DIZEN_ENV}-tours-grpc.rule=Host(`${GRPC_HOST}`) && PathRegexp(`^/dizen\.tours\.v1\.`)
-      - traefik.http.routers.${DIZEN_ENV}-tours-grpc.entrypoints=websecure
-      - traefik.http.routers.${DIZEN_ENV}-tours-grpc.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
-      - traefik.http.routers.${DIZEN_ENV}-tours-grpc.service=${DIZEN_ENV}-tours-grpc
-      - traefik.http.services.${DIZEN_ENV}-tours-grpc.loadbalancer.server.port=9090
-      - traefik.http.services.${DIZEN_ENV}-tours-grpc.loadbalancer.server.scheme=h2c
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-grpc.rule=Host(`${GRPC_HOST}`) && PathRegexp(`^/dizen\.tours\.v1\.`)
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-grpc.entrypoints=websecure
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-grpc.tls=true
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-grpc.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-grpc.service=${DIZEN_ENV}-v2-tours-grpc
+      - traefik.http.services.${DIZEN_ENV}-v2-tours-grpc.loadbalancer.server.port=9090
+      - traefik.http.services.${DIZEN_ENV}-v2-tours-grpc.loadbalancer.server.scheme=h2c
 
   booking:
     <<: *service-defaults
@@ -381,33 +206,30 @@ services:
       dockerfile: services/booking/Dockerfile
       target: production
       args: *build-args
-    networks: [internal, dokploy-network]
     environment:
       <<: *service-env
       SERVICE_NAME: booking
-      DATABASE_URL: postgres://booking:${BOOKING_DB_PASSWORD}@booking-db:5432/booking_db?sslmode=disable
+      DATABASE_URL: ${BOOKING_DATABASE_URL}
       REDIS_NAMESPACE: booking
-    depends_on:
-      booking-db: {condition: service_healthy}
-      redis: {condition: service_healthy}
-      rabbitmq: {condition: service_healthy}
     labels:
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
 
-      - traefik.http.routers.${DIZEN_ENV}-booking-rest.rule=Host(`${API_HOST}`) && PathPrefix(`/v1/booking/`)
-      - traefik.http.routers.${DIZEN_ENV}-booking-rest.entrypoints=websecure
-      - traefik.http.routers.${DIZEN_ENV}-booking-rest.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
-      - traefik.http.routers.${DIZEN_ENV}-booking-rest.middlewares=${DIZEN_ENV}-secure-headers@docker${EXTRA_MIDDLEWARES:-}
-      - traefik.http.routers.${DIZEN_ENV}-booking-rest.service=${DIZEN_ENV}-booking-rest
-      - traefik.http.services.${DIZEN_ENV}-booking-rest.loadbalancer.server.port=8080
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-rest.rule=Host(`${API_HOST}`) && PathPrefix(`/v1/booking/`)
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-rest.entrypoints=websecure
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-rest.tls=true
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-rest.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-rest.middlewares=${DIZEN_ENV}-v2-secure-headers@docker${EXTRA_MIDDLEWARES:-}
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-rest.service=${DIZEN_ENV}-v2-booking-rest
+      - traefik.http.services.${DIZEN_ENV}-v2-booking-rest.loadbalancer.server.port=8080
 
-      - traefik.http.routers.${DIZEN_ENV}-booking-grpc.rule=Host(`${GRPC_HOST}`) && PathRegexp(`^/dizen\.booking\.v1\.`)
-      - traefik.http.routers.${DIZEN_ENV}-booking-grpc.entrypoints=websecure
-      - traefik.http.routers.${DIZEN_ENV}-booking-grpc.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
-      - traefik.http.routers.${DIZEN_ENV}-booking-grpc.service=${DIZEN_ENV}-booking-grpc
-      - traefik.http.services.${DIZEN_ENV}-booking-grpc.loadbalancer.server.port=9090
-      - traefik.http.services.${DIZEN_ENV}-booking-grpc.loadbalancer.server.scheme=h2c
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-grpc.rule=Host(`${GRPC_HOST}`) && PathRegexp(`^/dizen\.booking\.v1\.`)
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-grpc.entrypoints=websecure
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-grpc.tls=true
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-grpc.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-grpc.service=${DIZEN_ENV}-v2-booking-grpc
+      - traefik.http.services.${DIZEN_ENV}-v2-booking-grpc.loadbalancer.server.port=9090
+      - traefik.http.services.${DIZEN_ENV}-v2-booking-grpc.loadbalancer.server.scheme=h2c
 
   admin:
     <<: *service-defaults
@@ -416,33 +238,29 @@ services:
       dockerfile: services/admin/Dockerfile
       target: production
       args: *build-args
-    networks: [internal, dokploy-network]
     environment:
       <<: *service-env
       SERVICE_NAME: admin
-      DATABASE_URL: postgres://admin:${ADMIN_DB_PASSWORD}@admin-db:5432/admin_db?sslmode=disable
+      DATABASE_URL: ${ADMIN_DATABASE_URL}
       REDIS_NAMESPACE: admin
-      # The BFF reaches the other three over the internal network, in plaintext gRPC: the
+      # The BFF reaches the other three over the internal network, in plaintext gRPC: that
       # traffic never leaves the private bridge (01 section 4.2).
       IDENTITY_GRPC_ADDR: identity:9090
       TOURS_GRPC_ADDR: tours:9090
       BOOKING_GRPC_ADDR: booking:9090
-    depends_on:
-      admin-db: {condition: service_healthy}
-      redis: {condition: service_healthy}
-      rabbitmq: {condition: service_healthy}
     labels:
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
 
       # Its own host, and only the REST surface: the dashboard is a web client and does not
       # speak gRPC (ADR A-1).
-      - traefik.http.routers.${DIZEN_ENV}-admin-rest.rule=Host(`${ADMIN_API_HOST}`) && PathPrefix(`/v1/`)
-      - traefik.http.routers.${DIZEN_ENV}-admin-rest.entrypoints=websecure
-      - traefik.http.routers.${DIZEN_ENV}-admin-rest.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
-      - traefik.http.routers.${DIZEN_ENV}-admin-rest.middlewares=${DIZEN_ENV}-secure-headers@docker${EXTRA_MIDDLEWARES:-}
-      - traefik.http.routers.${DIZEN_ENV}-admin-rest.service=${DIZEN_ENV}-admin-rest
-      - traefik.http.services.${DIZEN_ENV}-admin-rest.loadbalancer.server.port=8080
+      - traefik.http.routers.${DIZEN_ENV}-v2-admin-rest.rule=Host(`${ADMIN_API_HOST}`) && PathPrefix(`/v1/`)
+      - traefik.http.routers.${DIZEN_ENV}-v2-admin-rest.entrypoints=websecure
+      - traefik.http.routers.${DIZEN_ENV}-v2-admin-rest.tls=true
+      - traefik.http.routers.${DIZEN_ENV}-v2-admin-rest.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
+      - traefik.http.routers.${DIZEN_ENV}-v2-admin-rest.middlewares=${DIZEN_ENV}-v2-secure-headers@docker${EXTRA_MIDDLEWARES:-}
+      - traefik.http.routers.${DIZEN_ENV}-v2-admin-rest.service=${DIZEN_ENV}-v2-admin-rest
+      - traefik.http.services.${DIZEN_ENV}-v2-admin-rest.loadbalancer.server.port=8080
 
   mail-dispatcher:
     <<: *service-defaults
@@ -451,44 +269,32 @@ services:
       dockerfile: services/mail-dispatcher/Dockerfile
       target: production
       args: *build-args
-    # Internal network only, and no Traefik labels: this service consumes events and has no
-    # public API (01 section 2). Its probes are reachable from inside, which is all they
-    # need to be.
-    networks: [internal]
+    # No Traefik labels: this service consumes events and has no public API (01 section 2).
+    # It is still on dokploy-network, because that is where its database and the broker are.
     environment:
       <<: *service-env
       SERVICE_NAME: mail-dispatcher
-      DATABASE_URL: postgres://mail:${MAIL_DB_PASSWORD}@mail-db:5432/mail_db?sslmode=disable
+      DATABASE_URL: ${MAIL_DATABASE_URL}
       REDIS_NAMESPACE: mail-dispatcher
-    depends_on:
-      mail-db: {condition: service_healthy}
-      redis: {condition: service_healthy}
-      rabbitmq: {condition: service_healthy}
 
   # =========================================================================
   # Backups (RF-9)
   #
-  # Daily dump of the five databases to object storage outside this server, with 7 daily,
-  # 4 weekly and 3 monthly kept. It runs in its own container rather than as a Dokploy
-  # database backup because these databases belong to a compose stack and Dokploy does not
-  # manage them: what it can back up is what it created.
+  # The databases moved out of this compose but the backup did not: they still have to be
+  # dumped somewhere off the server, with 7 daily, 4 weekly and 3 monthly kept. It needs
+  # nothing but the DSNs and the bucket, which is why moving the databases changed nothing
+  # here.
   #
-  # By hand, when needed:
   #   docker compose run --rm backup backup     one run now
   #   docker compose run --rm backup verify     what is stored
-  #   docker compose run --rm backup restore    the restore drill, see deploy/backup/restore.sh
-  #
-  # Penpot (design.dizen.app, PRD-26 RF-12) is deployed as its own Dokploy application and
-  # is therefore not in this file, but RF-9 covers it too: losing the design files is as
-  # expensive as losing the data. Backing it up is adding its database to BACKUP_DATABASES
-  # with a DSN_PENPOT, plus its file volume, once that application exists.
+  #   make backup-drill                         the restore drill, against throwaway containers
   # =========================================================================
   backup:
     <<: *logging
     build:
       context: ./backup
     restart: unless-stopped
-    networks: [internal]
+    networks: [internal, dokploy-network]
     environment:
       DIZEN_ENV: ${DIZEN_ENV}
       TZ: ${BACKUP_TZ:-UTC}
@@ -499,18 +305,17 @@ services:
       BACKUP_RETAIN_WEEKLY: ${BACKUP_RETAIN_WEEKLY:-4}
       BACKUP_RETAIN_MONTHLY: ${BACKUP_RETAIN_MONTHLY:-3}
 
-      # One DSN per database, because one credential per database (hard rule 2). The backup
-      # container is the only one that holds all five, and it is also the only one with no
-      # port and no route: it talks to the databases and to the bucket, and to nothing else.
-      DSN_IDENTITY: postgres://identity:${IDENTITY_DB_PASSWORD}@identity-db:5432/identity_db?sslmode=disable
-      DSN_TOURS: postgres://tours:${TOURS_DB_PASSWORD}@tours-db:5432/tours_db?sslmode=disable
-      DSN_BOOKING: postgres://booking:${BOOKING_DB_PASSWORD}@booking-db:5432/booking_db?sslmode=disable
-      DSN_ADMIN: postgres://admin:${ADMIN_DB_PASSWORD}@admin-db:5432/admin_db?sslmode=disable
-      DSN_MAIL: postgres://mail:${MAIL_DB_PASSWORD}@mail-db:5432/mail_db?sslmode=disable
+      # The same DSNs the services use. This container is the only one that holds all five,
+      # and it is also the only one with no port and no route: it talks to the databases and
+      # to the bucket, and to nothing else.
+      DSN_IDENTITY: ${IDENTITY_DATABASE_URL}
+      DSN_TOURS: ${TOURS_DATABASE_URL}
+      DSN_BOOKING: ${BOOKING_DATABASE_URL}
+      DSN_ADMIN: ${ADMIN_DATABASE_URL}
+      DSN_MAIL: ${MAIL_DATABASE_URL}
 
-      # rclone is configured entirely through the environment, so there is no config file
-      # holding a key on the server. The remote is called `backup`, which is what the
-      # scripts address.
+      # rclone is configured entirely through the environment, so no config file on the
+      # server holds a key. The remote is called `backup`, which is what the scripts address.
       BACKUP_BUCKET: ${BACKUP_BUCKET}
       RCLONE_CONFIG_BACKUP_TYPE: s3
       RCLONE_CONFIG_BACKUP_PROVIDER: ${BACKUP_S3_PROVIDER:-Cloudflare}
@@ -521,12 +326,6 @@ services:
       # R2 does not allow the bucket-existence probe rclone makes by default, and the
       # credential is scoped to one bucket anyway.
       RCLONE_CONFIG_BACKUP_NO_CHECK_BUCKET: "true"
-    depends_on:
-      identity-db: {condition: service_healthy}
-      tours-db: {condition: service_healthy}
-      booking-db: {condition: service_healthy}
-      admin-db: {condition: service_healthy}
-      mail-db: {condition: service_healthy}
     deploy:
       resources:
         limits:
@@ -540,11 +339,10 @@ services:
   # =========================================================================
   # Authoring: routing and tiles (RF-3b, doc 07)
   #
-  # Neither of these is on dokploy-network, so neither is reachable from the internet:
-  # Valhalla is consumed by `tours` over the internal network and nothing else. They are
-  # behind the `authoring` profile and start only where the profile is enabled, which is
-  # staging -- the dashboard is their only user, and a re-import must not compete for CPU
-  # with the traffic of real users (07 section 7).
+  # Neither is on dokploy-network, so neither is reachable from the internet or from the v1
+  # stack: Valhalla is consumed by `tours` over the internal network and by nothing else.
+  # Both are behind profiles and run in staging only -- the dashboard is their only user, and
+  # a re-import must not compete for CPU with user traffic (07 section 7).
   #
   #   docker compose --profile authoring up -d
   # =========================================================================
@@ -573,7 +371,7 @@ services:
       resources:
         limits:
           # 07 section 3.2 budgets 2-4 GB for a regional extract. The ceiling is explicit so
-          # a rebuild cannot take the VPS down with it.
+          # a rebuild cannot take the VPS -- and the v1 stack on it -- down with it.
           cpus: "2.0"
           memory: 4G
         reservations:
@@ -583,12 +381,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      # The first start builds the tiles from the extract, and that is measured in minutes,
-      # not seconds. Until it finishes the container is starting, not unhealthy.
+      # The first start builds the tiles from the extract, measured in minutes. Until it
+      # finishes the container is starting, not unhealthy.
       start_period: 30m
 
-  # One-shot job, not a service: it produces a .pmtiles file and exits (07 section 4.2).
-  # It is run on demand, or monthly from the scheduler, never on every deployment.
+  # One-shot job, not a service: it produces a .pmtiles file and exits (07 section 4.2). Run
+  # on demand, or monthly from the scheduler, never on every deployment.
   #
   #   docker compose --profile tiles run --rm planetiler
   #

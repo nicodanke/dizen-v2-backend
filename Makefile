@@ -205,9 +205,8 @@ proto-check: ## Fail if `make proto` leaves an uncommitted diff (hard rule 3)
 COMPOSE := docker compose -f $(ROOT_DIR)/deploy/docker-compose.yml
 
 .PHONY: up
-up: ## Bring up the whole local environment
-	@$(COMPOSE) up -d --build
-	@$(ROOT_DIR)/scripts/wait-for-services.sh
+up: ## Bring up the whole local environment (secrets from Doppler when configured)
+	@$(ROOT_DIR)/scripts/local-up.sh
 
 .PHONY: down
 down: ## Tear down the local environment, keeping the volumes
