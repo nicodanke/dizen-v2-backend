@@ -278,19 +278,27 @@ services:
       REDIS_NAMESPACE: mail-dispatcher
 
   # =========================================================================
-  # Backups (RF-9)
+  # Backups (RF-9) -- behind a profile, off by default
   #
-  # The databases moved out of this compose but the backup did not: they still have to be
-  # dumped somewhere off the server, with 7 daily, 4 weekly and 3 monthly kept. It needs
-  # nothing but the DSNs and the bucket, which is why moving the databases changed nothing
-  # here.
+  # It does not start unless the `backup` profile is enabled, because a backup container
+  # without valid bucket credentials is a container in a restart loop, and an environment
+  # that is not ready to store backups yet should not be paying that.
   #
-  #   docker compose run --rm backup backup     one run now
-  #   docker compose run --rm backup verify     what is stored
-  #   make backup-drill                         the restore drill, against throwaway containers
+  #   docker compose --profile backup up -d       enable it
+  #   docker compose run --rm backup backup       one run now
+  #   docker compose run --rm backup verify       what is stored
+  #   make backup-drill                           the restore drill, on throwaway containers
+  #
+  # Enabling it later is filling in the BACKUP_* variables and adding the profile. Nothing
+  # else changes: it only ever needed the DSNs above and a bucket.
+  #
+  # Until then the only protection the data has is whatever the managed Postgres provides --
+  # Neon keeps its own point-in-time history -- which covers a dropped table but not a
+  # deleted project, and gives no restore drill (RNF-3).
   # =========================================================================
   backup:
     <<: *logging
+    profiles: [backup]
     build:
       context: ./backup
     restart: unless-stopped
@@ -316,16 +324,30 @@ services:
 
       # rclone is configured entirely through the environment, so no config file on the
       # server holds a key. The remote is called `backup`, which is what the scripts address.
-      BACKUP_BUCKET: ${BACKUP_BUCKET}
-      RCLONE_CONFIG_BACKUP_TYPE: s3
-      RCLONE_CONFIG_BACKUP_PROVIDER: ${BACKUP_S3_PROVIDER:-Cloudflare}
-      RCLONE_CONFIG_BACKUP_ENDPOINT: ${BACKUP_S3_ENDPOINT}
-      RCLONE_CONFIG_BACKUP_REGION: ${BACKUP_S3_REGION:-auto}
-      RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID}
-      RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY}
+      BACKUP_BUCKET: ${BACKUP_BUCKET:-}
+
+      # The remote is configured entirely from the environment, so no config file on the
+      # server holds a key, and the destination is a variable rather than a rewrite. rclone
+      # speaks S3-compatible storage and Google Cloud Storage natively; `s3` here is the
+      # protocol, not Amazon -- R2, MinIO and Backblaze all use it.
+      #
+      #   S3-compatible:  BACKUP_REMOTE_TYPE=s3           + the BACKUP_S3_* variables
+      #   Google:         BACKUP_REMOTE_TYPE="google cloud storage" + the BACKUP_GCS_* ones
+      RCLONE_CONFIG_BACKUP_TYPE: ${BACKUP_REMOTE_TYPE:-s3}
+
+      RCLONE_CONFIG_BACKUP_PROVIDER: ${BACKUP_S3_PROVIDER:-}
+      RCLONE_CONFIG_BACKUP_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      RCLONE_CONFIG_BACKUP_REGION: ${BACKUP_S3_REGION:-}
+      RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+      RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
       # R2 does not allow the bucket-existence probe rclone makes by default, and the
       # credential is scoped to one bucket anyway.
       RCLONE_CONFIG_BACKUP_NO_CHECK_BUCKET: "true"
+
+      # Google Cloud Storage. The service account key is the whole JSON, in one variable.
+      RCLONE_CONFIG_BACKUP_PROJECT_NUMBER: ${BACKUP_GCS_PROJECT:-}
+      RCLONE_CONFIG_BACKUP_SERVICE_ACCOUNT_CREDENTIALS: ${BACKUP_GCS_SERVICE_ACCOUNT_JSON:-}
+      RCLONE_CONFIG_BACKUP_LOCATION: ${BACKUP_GCS_LOCATION:-}
     deploy:
       resources:
         limits:
