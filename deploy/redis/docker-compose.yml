@@ -13,7 +13,7 @@
 #
 #   ssh -L 6379:127.0.0.1:6379 <user>@<vps>    then redis-cli -a <password>
 
-name: dizen-v2-redis-${DIZEN_ENV}
+name: "dizen-v2-redis-${DIZEN_ENV:?DIZEN_ENV is required: staging or production. Without it the container is named `dizen-v2-redis-` and nothing resolves it}"
 
 networks:
   dokploy-network:
@@ -30,7 +30,7 @@ services:
 
     # Fixed, because it is the host the services connect to: REDIS_URL points at
     # redis://:<password>@dizen-v2-redis-<env>:6379/0.
-    container_name: dizen-v2-redis-${DIZEN_ENV}
+    container_name: dizen-v2-redis-${DIZEN_ENV:?DIZEN_ENV is required}
 
     command:
       - redis-server
