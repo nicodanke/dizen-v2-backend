@@ -15,7 +15,7 @@
 #
 #   ssh -L 15672:127.0.0.1:15672 <user>@<vps>    then http://localhost:15672
 
-name: dizen-v2-rabbitmq-${DIZEN_ENV}
+name: "dizen-v2-rabbitmq-${DIZEN_ENV:?DIZEN_ENV is required: staging or production. Without it the container is named `dizen-v2-rabbitmq-` and nothing resolves it}"
 
 networks:
   # Created by Dokploy. This is where the services that publish and consume live.
@@ -34,12 +34,12 @@ services:
     # The container name is fixed because it is also the hostname the services connect to:
     # AMQP_URL points at amqp://<user>:<pass>@dizen-v2-rabbitmq-<env>:5672/. Without it Docker
     # would generate a name and the DSN would have to change on every recreation.
-    container_name: dizen-v2-rabbitmq-${DIZEN_ENV}
+    container_name: dizen-v2-rabbitmq-${DIZEN_ENV:?DIZEN_ENV is required}
 
     # RabbitMQ writes its data under a directory named after the node, and the node name is
     # derived from the hostname. Pinning the hostname is what keeps a recreated container
     # finding the queues the previous one left behind instead of coming up empty.
-    hostname: dizen-v2-rabbitmq-${DIZEN_ENV}
+    hostname: dizen-v2-rabbitmq-${DIZEN_ENV:?DIZEN_ENV is required}
 
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}

@@ -18,7 +18,7 @@
 # this network, so a router named `identity-rest` would be one name away from a collision;
 # `staging-identity-rest` is not.
 
-name: dizen-v2-${DIZEN_ENV}
+name: "dizen-v2-${DIZEN_ENV:?DIZEN_ENV is required: staging or production. It names the project and prefixes every Traefik router, so an empty one collides with the other environment}"
 
 # ---------------------------------------------------------------------------
 # Shared fragments
@@ -62,10 +62,21 @@ x-service-env: &service-env
   # golang-migrate takes. A failed migration fails the start, the container never becomes
   # ready, and the deployment stops without touching the running version.
   DATABASE_RUN_MIGRATIONS: "true"
-  # Managed outside this compose (D-32). One credential per service, so a leaked one exposes
-  # a single domain (hard rule 2).
-  REDIS_URL: ${REDIS_URL}
-  AMQP_URL: ${AMQP_URL}
+  # Managed outside this compose (D-32), and assembled here rather than stored whole.
+  #
+  # The password used to live in two places -- the store's own Dokploy project, and again
+  # inside a full DSN in Doppler -- and the two had to match. They did not, and the symptom
+  # was `403 username or password not allowed`, which reads like a wrong password rather than
+  # like two values drifting apart. Building the URL from the same variable the store project
+  # uses makes that mismatch impossible.
+  #
+  # The host is assembled too, from DIZEN_ENV, so it cannot drift from the container name the
+  # store's compose fixes.
+  #
+  # Setting REDIS_URL or AMQP_URL directly still wins, which is the escape hatch for the day
+  # one of these moves to a managed provider with its own hostname and TLS.
+  REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@dizen-v2-redis-${DIZEN_ENV}:6379/0}
+  AMQP_URL: ${AMQP_URL:-amqp://${RABBITMQ_USER:-dizen}:${RABBITMQ_PASSWORD}@dizen-v2-rabbitmq-${DIZEN_ENV}:5672/}
   AMQP_EXCHANGE: ${AMQP_EXCHANGE:-dizen.events}
   # Empty until RF-14 deploys the collector; an empty endpoint disables exporting rather
   # than retrying against nothing.
