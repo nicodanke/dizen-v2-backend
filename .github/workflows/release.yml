@@ -1,7 +1,8 @@
 # Production release (PRD-18 RF-11, RF-12, RF-12b).
 #
-# A tag `vX.Y.Z` on main is the only thing that deploys to production. Staging follows the
-# `staging` branch (RF-4); this workflow is the production half, and it
+# A tag `vX.Y.Z` on main is what releases production: this workflow writes the changelog and
+# the GitHub release, and `images.yml` publishes the images for that tag and then triggers
+# the deployment. It
 # deliberately does not depend on dizen-v2-mobile or dizen-v2-web: the backend goes first,
 # always, because the contract is additive and a published app has to keep working against
 # a newer backend (RF-12b, 01 section 3.2).
@@ -68,29 +69,13 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md
 
-      # Dokploy pulls, builds and rolls the containers over one by one, holding the old one
-      # until the new one answers /readyz (RF-10, RNF-2). This step only asks it to start;
-      # what confirms the deployment is the health of the environment afterwards.
+      # The deployment is NOT triggered here. `images.yml` triggers it, because it is the
+      # workflow that knows when the images for this tag finished publishing; firing the
+      # webhook from here would race the build the deployment depends on and pull an image
+      # that does not exist yet.
       #
-      # Missing secret is a failure and not a warning: a release that publishes notes and
-      # deploys nothing is the worst of the two outcomes, because it looks finished.
-      - name: Deploy to production
-        env:
-          WEBHOOK: ${{ secrets.DOKPLOY_PRODUCTION_WEBHOOK_URL }}
-        run: |
-          if [ -z "${WEBHOOK:-}" ]; then
-            echo "::error::The DOKPLOY_PRODUCTION_WEBHOOK_URL secret is missing, so ${GITHUB_REF_NAME} was published but not deployed. Configure it in the repository settings (RF-8)."
-            exit 1
-          fi
-
-          echo "==> triggering the production deployment"
-          curl --fail-with-body -sS --retry 3 --retry-delay 5 --max-time 60 \
-            -X POST \
-            -H 'Content-Type: application/json' \
-            -d "{\"ref\":\"${GITHUB_REF_NAME}\",\"commit\":\"${GITHUB_SHA}\"}" \
-            "$WEBHOOK"
-          echo ""
-          echo "==> requested; follow it in Dokploy"
+      # This workflow owns the changelog and the GitHub release. Those do not depend on the
+      # images, so they can run in parallel with them.
 
       # Optional and last: if the notification fails, the deployment already happened and the
       # release must not be reported as broken. The Sentry release for this commit arrives

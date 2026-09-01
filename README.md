@@ -207,6 +207,30 @@ make commit-check                    # this branch against main
 make commit-check RANGE=HEAD         # the whole history
 ```
 
+### What triggers a deployment
+
+Not a git push. Every git-based trigger -- a branch watcher, a tag you push by hand --
+reacts to the git event, which happens *before* the images for that commit exist; the
+deployment would pull `manifest unknown` every time. Only something running after the build
+knows they are there, so `images.yml` gates its deploy job on all five images being
+published.
+
+| Event | Tag the workflow pushes | Dokploy pattern |
+|---|---|---|
+| push to `staging` | `deployed-staging-<sha>` | `deployed-staging-*` |
+| tag `v1.2.3` | `deployed-v1.2.3` | `deployed-v*` |
+
+The two patterns do not overlap, so one environment cannot pick up the other's tag. Because
+the trigger is a ref rather than a URL there is no unauthenticated webhook and no secret to
+keep, and the deployment leaves a trace in the history saying which commit went out and when.
+
+Note the second tag on a release: `v1.2.3` is pushed by a person and exists before the images
+do, so it cannot be the trigger. `deployed-v1.2.3` is pushed by the workflow once they exist.
+
+**Dokploy's own branch auto-deploy must be off**, on all three projects. On the application
+it is the trigger that races the build; on Redis and RabbitMQ it would recreate the broker
+and the cache on every unrelated commit.
+
 ### The other two workflows
 
 | Workflow | Fires on | Does |

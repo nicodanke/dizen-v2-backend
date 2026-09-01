@@ -7,7 +7,10 @@
 #
 # What this file assumes about Dokploy:
 #   - it runs Traefik and owns the certificates, on the external `dokploy-network`;
-#   - it builds on the server from this repository, so `build.context` is the repository root;
+#   - it PULLS images rather than building them (D-35). There is deliberately no `build:`
+#     section for the services: Dokploy runs `up -d --build` with that flag fixed, so a build
+#     section is a build no matter what else is configured. Compiling on this VPS took it
+#     down three times; the images come from GHCR, published by .github/workflows/images.yml;
 #   - the data stores are NOT here: Postgres, Redis and RabbitMQ are managed outside this
 #     compose and arrive as connection strings (D-32), the same way the v1 stack does it.
 #
@@ -73,11 +76,6 @@ x-service-env: &service-env
   JWT_AUDIENCE: ${JWT_AUDIENCE:-dizen-app}
   JWT_PUBLIC_KEYS_PEM: ${JWT_PUBLIC_KEYS_PEM}
 
-x-build-args: &build-args
-  VERSION: ${VERSION:-dev}
-  COMMIT: ${COMMIT:-unknown}
-  BUILD_DATE: ${BUILD_DATE:-unknown}
-
 # Traefik labels shared by every routed service would be nice to factor out, but a YAML
 # anchor cannot interpolate the service name into a label key. They are written per service.
 
@@ -114,11 +112,7 @@ services:
   # =========================================================================
   identity:
     <<: *service-defaults
-    build:
-      context: ..
-      dockerfile: services/identity/Dockerfile
-      target: production
-      args: *build-args
+    image: ${IMAGE_REGISTRY}/identity:${IMAGE_TAG}
     environment:
       <<: *service-env
       SERVICE_NAME: identity
@@ -166,11 +160,7 @@ services:
 
   tours:
     <<: *service-defaults
-    build:
-      context: ..
-      dockerfile: services/tours/Dockerfile
-      target: production
-      args: *build-args
+    image: ${IMAGE_REGISTRY}/tours:${IMAGE_TAG}
     environment:
       <<: *service-env
       SERVICE_NAME: tours
@@ -201,11 +191,7 @@ services:
 
   booking:
     <<: *service-defaults
-    build:
-      context: ..
-      dockerfile: services/booking/Dockerfile
-      target: production
-      args: *build-args
+    image: ${IMAGE_REGISTRY}/booking:${IMAGE_TAG}
     environment:
       <<: *service-env
       SERVICE_NAME: booking
@@ -233,11 +219,7 @@ services:
 
   admin:
     <<: *service-defaults
-    build:
-      context: ..
-      dockerfile: services/admin/Dockerfile
-      target: production
-      args: *build-args
+    image: ${IMAGE_REGISTRY}/admin:${IMAGE_TAG}
     environment:
       <<: *service-env
       SERVICE_NAME: admin
@@ -264,11 +246,7 @@ services:
 
   mail-dispatcher:
     <<: *service-defaults
-    build:
-      context: ..
-      dockerfile: services/mail-dispatcher/Dockerfile
-      target: production
-      args: *build-args
+    image: ${IMAGE_REGISTRY}/mail-dispatcher:${IMAGE_TAG}
     # No Traefik labels: this service consumes events and has no public API (01 section 2).
     # It is still on dokploy-network, because that is where its database and the broker are.
     environment:
