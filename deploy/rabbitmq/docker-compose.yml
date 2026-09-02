@@ -42,8 +42,13 @@ services:
     hostname: dizen-v2-rabbitmq-${DIZEN_ENV:?DIZEN_ENV is required}
 
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      # Both required, and loudly. RabbitMQ applies these only on the first boot, and an
+      # EMPTY value is not an error to it: it simply creates no user, and every later
+      # connection is refused with `invalid credentials` -- the same message it gives for a
+      # wrong password, because it deliberately does not distinguish the two. That sends you
+      # looking for a password mismatch that does not exist.
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?RABBITMQ_USER is required. An empty value creates no user at all and every connection is refused}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required. Generate it with openssl rand -hex 32}
 
       # The memory and disk limits are NOT set here. The image rejects
       # RABBITMQ_VM_MEMORY_HIGH_WATERMARK and RABBITMQ_DISK_FREE_LIMIT as deprecated and

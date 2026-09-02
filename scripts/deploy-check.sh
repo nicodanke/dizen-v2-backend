@@ -38,9 +38,23 @@ for stack in "${STACKS[@]}"; do
 
   : > "$STDERR"
 
-  # The example file carries every variable with an empty value, which is enough to resolve
-  # the interpolation: what is being checked here is the shape of the file, not the values.
-  if ! docker compose -f "$compose_file" --env-file "$env_file" config --quiet 2>"$STDERR"; then
+  # Variables declared `${NAME:?...}` are the ones a deployment must not start without, and
+  # they are exactly the ones the example file leaves EMPTY -- deliberately, so that copying
+  # it wholesale into a real environment fails loudly instead of running with a placeholder
+  # password that works.
+  #
+  # So the check supplies a value for them here, read out of the compose file itself rather
+  # than from a list that would drift: what is being verified is the shape of the file, not
+  # the values.
+  required="$(grep -oE '\$\{[A-Z0-9_]+:\?' "$compose_file" | sed 's/\${//;s/:?//' | sort -u)"
+
+  placeholders=()
+  for name in $required; do
+    placeholders+=("${name}=deploy-check")
+  done
+
+  if ! env "${placeholders[@]}" \
+      docker compose -f "$compose_file" --env-file "$env_file" config --quiet 2>"$STDERR"; then
     echo "error: $compose_file is not valid" >&2
     cat "$STDERR" >&2
     exit 1
@@ -67,5 +81,6 @@ done
 
 # The profiles of the application stack too: a service that only starts in staging still has
 # to be valid.
-docker compose -f "deploy/docker-compose.prod.yml" --env-file "deploy/dokploy.env.example" \
-  --profile authoring --profile tiles config --quiet
+env DIZEN_ENV=deploy-check \
+  docker compose -f "deploy/docker-compose.prod.yml" --env-file "deploy/dokploy.env.example" \
+    --profile authoring --profile tiles config --quiet
