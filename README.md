@@ -343,19 +343,28 @@ would on an empty machine: this VPS also runs v1.
 
 | | Staging | Production |
 |---|---|---|
-| REST | `api.staging.v2.dizen.pro` | `api.v2.dizen.pro` |
-| gRPC | `grpc.staging.v2.dizen.pro` | `grpc.v2.dizen.pro` |
+| REST, all three services | `api.staging.v2.dizen.pro` | `api.v2.dizen.pro` |
+| gRPC identity | `grpc-identity.staging.v2.dizen.pro` | `grpc-identity.v2.dizen.pro` |
+| gRPC tours | `grpc-tours.staging.v2.dizen.pro` | `grpc-tours.v2.dizen.pro` |
+| gRPC booking | `grpc-booking.staging.v2.dizen.pro` | `grpc-booking.v2.dizen.pro` |
 | Dashboard API | `admin-api.staging.v2.dizen.pro` | `admin-api.v2.dizen.pro` |
 
 v2 lives under its own subdomain because **v1 already owns `api.dizen.pro` and
 `grpc-*.dizen.pro`** and cannot be turned off yet (`D-31`). The cutover, when v1 is retired,
 is a DNS and host-rule change and nothing else.
 
-The REST host is path-routed and the gRPC host is routed by proto package, both resting on
-one convention: **the first segment after `/v1/` and the proto package both carry the service
-name** (`D-24`). That keeps the routing a constant instead of a table that grows with every
-RPC, and every new `google.api.http` annotation has to respect it. Only `/v1/` is published;
-`/livez`, `/readyz` and `/metrics` answer on the same port and are reachable only from inside.
+REST shares one host and is routed by path, resting on a convention: **the first segment
+after `/v1/` carries the service name** (`D-24`), so the routing is a constant rather than a
+table that grows with every RPC. Only `/v1/` is published; `/livez`, `/readyz` and `/metrics`
+answer on the same port and are reachable only from inside.
+
+**gRPC gets a host per service** (`D-38`), and that is not symmetry for its own sake. Routing
+one shared gRPC host by proto package made reflection impossible: a reflection call travels
+under `/grpc.reflection...` and does not say whose schema it wants, so there is nothing to
+route on -- Traefik answered 404 and the client reported it as an unreadable framing error. A
+host each also drops the requirement that every proto package be named after its service, a
+convention that had to be remembered on each new file and broke silently when it was not.
+It is also what the v1 stack already does, so the mobile app is not learning a new pattern.
 
 `scheme=h2c` on the gRPC services is the line this kind of deployment most often gets wrong:
 without it Traefik downgrades the internal leg to HTTP/1.1 and every call dies with an
@@ -363,7 +372,7 @@ unreadable framing error. The v1 stack sets the same label for the same reason. 
 against the real domain rather than by hand:
 
 ```bash
-grpcurl -d '{}' grpc.staging.v2.dizen.pro:443 dizen.identity.v1.HealthService/HealthPing
+make grpc-check HOST=grpc-identity.staging.v2.dizen.pro:443
 ```
 
 ### Living next to v1

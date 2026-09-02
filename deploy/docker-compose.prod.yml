@@ -111,15 +111,22 @@ services:
   #
   # Routing (RF-5, RF-6):
   #
-  #   REST   ${API_HOST}/v1/<service>/...      -> port 8080, plain HTTP
-  #   gRPC   ${GRPC_HOST}  /dizen.<svc>.v1...  -> port 9090, h2c end to end
+  #   REST   ${API_HOST}/v1/<service>/...   -> port 8080, plain HTTP
+  #   gRPC   one host per service           -> port 9090, h2c end to end
   #
-  # Both rules rest on one convention: the first segment after /v1/ and the proto package
-  # both carry the service name (D-24). That keeps the routing a constant instead of a table
-  # that grows with every RPC, and every new google.api.http annotation has to respect it.
+  # REST shares one host and is routed by path, resting on a convention: the first segment
+  # after /v1/ carries the service name (D-24). gRPC gets a host each, and that is not
+  # symmetry for its own sake (D-38).
   #
-  # Only /v1/ is published. /livez, /readyz and /metrics answer on the same port and are
-  # reachable only from inside.
+  # Routing one gRPC host by proto package made reflection impossible: a reflection call
+  # travels under /grpc.reflection... and does not say which service's schema it wants, so
+  # there is nothing for Traefik to route on. It answered 404, and the client reported it as
+  # a framing error. A host per service also drops the requirement that every proto package
+  # be named after its service -- a convention that had to be remembered on each new file and
+  # broke silently when it was not.
+  #
+  # Only /v1/ is published on the REST host. /livez, /readyz and /metrics answer on the same
+  # port and are reachable only from inside.
   # =========================================================================
   identity:
     <<: *service-defaults
@@ -150,7 +157,7 @@ services:
       # terminates TLS at the edge and forwards HTTP/2 in the clear over the private network.
       # Without `scheme=h2c` Traefik downgrades to HTTP/1.1 and every call fails with an
       # unreadable framing error. The v1 stack sets the same label for the same reason.
-      - traefik.http.routers.${DIZEN_ENV}-v2-identity-grpc.rule=Host(`${GRPC_HOST}`) && PathRegexp(`^/dizen\.identity\.v1\.`)
+      - traefik.http.routers.${DIZEN_ENV}-v2-identity-grpc.rule=Host(`${IDENTITY_GRPC_HOST}`)
       - traefik.http.routers.${DIZEN_ENV}-v2-identity-grpc.entrypoints=websecure
       - traefik.http.routers.${DIZEN_ENV}-v2-identity-grpc.tls=true
       - traefik.http.routers.${DIZEN_ENV}-v2-identity-grpc.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
@@ -167,6 +174,14 @@ services:
       # RF-5: staging carries an extra basic authentication, attached through
       # EXTRA_MIDDLEWARES, which is empty in production. The users come from a variable
       # because a htpasswd line is a credential.
+      #
+      # THE TWO VARIABLES ARE COUPLED. An empty BASIC_AUTH_USERS makes this label empty,
+      # Traefik ignores an empty label, and the middleware is never created -- so every
+      # router that EXTRA_MIDDLEWARES points at is DROPPED, not left unauthenticated. The
+      # symptom is not an authentication error: it is Traefik answering with its own default
+      # certificate, because no router matches the host at all.
+      #
+      # Set both, or neither.
       - traefik.http.middlewares.${DIZEN_ENV}-v2-basicauth.basicauth.users=${BASIC_AUTH_USERS:-}
 
   tours:
@@ -192,7 +207,7 @@ services:
       - traefik.http.routers.${DIZEN_ENV}-v2-tours-rest.service=${DIZEN_ENV}-v2-tours-rest
       - traefik.http.services.${DIZEN_ENV}-v2-tours-rest.loadbalancer.server.port=8080
 
-      - traefik.http.routers.${DIZEN_ENV}-v2-tours-grpc.rule=Host(`${GRPC_HOST}`) && PathRegexp(`^/dizen\.tours\.v1\.`)
+      - traefik.http.routers.${DIZEN_ENV}-v2-tours-grpc.rule=Host(`${TOURS_GRPC_HOST}`)
       - traefik.http.routers.${DIZEN_ENV}-v2-tours-grpc.entrypoints=websecure
       - traefik.http.routers.${DIZEN_ENV}-v2-tours-grpc.tls=true
       - traefik.http.routers.${DIZEN_ENV}-v2-tours-grpc.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
@@ -220,7 +235,7 @@ services:
       - traefik.http.routers.${DIZEN_ENV}-v2-booking-rest.service=${DIZEN_ENV}-v2-booking-rest
       - traefik.http.services.${DIZEN_ENV}-v2-booking-rest.loadbalancer.server.port=8080
 
-      - traefik.http.routers.${DIZEN_ENV}-v2-booking-grpc.rule=Host(`${GRPC_HOST}`) && PathRegexp(`^/dizen\.booking\.v1\.`)
+      - traefik.http.routers.${DIZEN_ENV}-v2-booking-grpc.rule=Host(`${BOOKING_GRPC_HOST}`)
       - traefik.http.routers.${DIZEN_ENV}-v2-booking-grpc.entrypoints=websecure
       - traefik.http.routers.${DIZEN_ENV}-v2-booking-grpc.tls=true
       - traefik.http.routers.${DIZEN_ENV}-v2-booking-grpc.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
