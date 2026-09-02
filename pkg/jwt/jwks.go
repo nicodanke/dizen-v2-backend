@@ -3,7 +3,9 @@ package jwt
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 )
 
 // JWKSPath is where the key set is published. Only identity serves it; the other services
@@ -73,7 +75,7 @@ func LoadKeySet(cfg Config) (*KeySet, error) {
 	keys := NewKeySet()
 
 	if cfg.PrivateKeyPEM != "" {
-		key, err := ParsePrivateKeyPEM([]byte(cfg.PrivateKeyPEM))
+		key, err := ParsePrivateKeyPEM(normalizePEM(cfg.PrivateKeyPEM))
 		if err != nil {
 			return nil, err
 		}
@@ -84,12 +86,35 @@ func LoadKeySet(cfg Config) (*KeySet, error) {
 	}
 
 	if cfg.PublicKeysPEM != "" {
-		if err := addPublicKeys(keys, []byte(cfg.PublicKeysPEM)); err != nil {
+		if err := addPublicKeys(keys, normalizePEM(cfg.PublicKeysPEM)); err != nil {
 			return nil, err
+		}
+
+		// A non-empty value that yields no key is a configuration error, and it has to say
+		// so. Only the service that issues tokens holds a private key; the other four carry
+		// public keys alone, so without this they would start with an empty key set, look
+		// healthy, and reject every token they were given -- with nothing in the log to
+		// explain it.
+		if len(keys.Keys()) == 0 {
+			return nil, fmt.Errorf("%w: the public keys are set but contain no PEM block", ErrInvalidKey)
 		}
 	}
 
 	return keys, nil
+}
+
+// normalizePEM accepts a PEM whose newlines arrived escaped as the two characters `\` and
+// `n`, and turns them back into real ones.
+//
+// That form is not a mistake to reject: it is what a .env file needs, because godotenv
+// expands the escapes as it reads the file. A secrets manager expands nothing, so the same
+// value arrives with literal backslashes and the PEM decoder sees garbage. The two forms
+// travel through different transports and both are legitimate, so both are accepted here
+// rather than in whichever of them happens to be configured today.
+//
+// A real PEM never contains a backslash, so the substitution cannot corrupt a valid one.
+func normalizePEM(pem string) []byte {
+	return []byte(strings.ReplaceAll(pem, `\n`, "\n"))
 }
 
 // addPublicKeys parses a concatenation of PEM blocks, so several retired keys fit in one

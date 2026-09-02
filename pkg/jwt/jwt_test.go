@@ -587,3 +587,75 @@ func TestAddRejectsAMalformedPublicKey(t *testing.T) {
 		t.Errorf("a malformed key was accepted: %v", err)
 	}
 }
+
+// TestLoadKeySetAcceptsEscapedPEM covers the two transports a key travels through.
+//
+// A .env file needs the escapes, because godotenv expands them on the way in; a secrets
+// manager expands nothing, so the same value arrives with literal backslashes. Both forms
+// are legitimate and the loader has to take either, or a deployment fails on a key that is
+// correct but was carried by the other route.
+func TestLoadKeySetAcceptsEscapedPEM(t *testing.T) {
+	t.Parallel()
+
+	key, err := jwt.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	privatePEM, err := jwt.EncodePrivateKeyPEM(key)
+	if err != nil {
+		t.Fatalf("EncodePrivateKeyPEM: %v", err)
+	}
+
+	publicPEM, err := jwt.EncodePublicKeyPEM(key)
+	if err != nil {
+		t.Fatalf("EncodePublicKeyPEM: %v", err)
+	}
+
+	escape := func(pem []byte) string {
+		return strings.ReplaceAll(strings.TrimSpace(string(pem)), "\n", `\n`)
+	}
+
+	cases := []struct {
+		name string
+		cfg  jwt.Config
+	}{
+		{"issuer, real newlines", jwt.Config{
+			PrivateKeyPEM: string(privatePEM), PublicKeysPEM: string(publicPEM),
+		}},
+		{"issuer, escaped newlines", jwt.Config{
+			PrivateKeyPEM: escape(privatePEM), PublicKeysPEM: escape(publicPEM),
+		}},
+		{"verifier only, real newlines", jwt.Config{PublicKeysPEM: string(publicPEM)}},
+		{"verifier only, escaped newlines", jwt.Config{PublicKeysPEM: escape(publicPEM)}},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			keys, err := jwt.LoadKeySet(testCase.cfg)
+			if err != nil {
+				t.Fatalf("LoadKeySet: %v", err)
+			}
+
+			if len(keys.Keys()) != 1 {
+				t.Fatalf("loaded %d keys, want 1", len(keys.Keys()))
+			}
+		})
+	}
+}
+
+// TestLoadKeySetRejectsUnreadablePublicKeys is the half that used to be silent.
+//
+// Only the service that issues tokens holds a private key, and an unreadable one is loud
+// because parsing it fails. The other four carry public keys alone: without this check they
+// started with an empty key set, reported themselves healthy, and rejected every token they
+// were given, with nothing in the log to say why.
+func TestLoadKeySetRejectsUnreadablePublicKeys(t *testing.T) {
+	t.Parallel()
+
+	if _, err := jwt.LoadKeySet(jwt.Config{PublicKeysPEM: "not a pem block"}); !errors.Is(err, jwt.ErrInvalidKey) {
+		t.Fatalf("LoadKeySet error = %v, want ErrInvalidKey", err)
+	}
+}
