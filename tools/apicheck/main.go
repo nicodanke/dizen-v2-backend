@@ -125,6 +125,12 @@ func run(dir string) error {
 
 	sort.Strings(files)
 
+	// Two files carrying the same id describe the same resource twice, which happens after a
+	// rename that Yaak also wrote under the old name. Nothing breaks loudly: the collection
+	// simply has a stale copy that drifts from the live one, and the counts below quietly go
+	// up. Left alone, whichever file Yaak reads last wins.
+	seenIDs := map[string]string{}
+
 	var (
 		failures     []string
 		requests     int
@@ -148,6 +154,18 @@ func run(dir string) error {
 		}
 
 		seenModels[doc.Model] = true
+
+		if doc.ID != "" {
+			if previous, duplicated := seenIDs[doc.ID]; duplicated {
+				failures = append(failures, fmt.Sprintf(
+					"%s duplicates the id %q, already declared by %s. Delete the stale one: "+
+						"a rename that Yaak also wrote under the old name leaves both, and the "+
+						"copy that is not the live one drifts silently",
+					filepath.Base(file), doc.ID, previous))
+			}
+
+			seenIDs[doc.ID] = filepath.Base(file)
+		}
 
 		switch doc.Model {
 		case "environment":

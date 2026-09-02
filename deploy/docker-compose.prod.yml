@@ -36,6 +36,15 @@ x-logging: &logging
 x-service-defaults: &service-defaults
   <<: *logging
   restart: unless-stopped
+  # Without this a deployment can quietly run the previous build. IMAGE_TAG is a moving tag
+  # -- `staging` follows the branch -- and `docker compose up` does not re-pull an image it
+  # already has under that name: it sees `...:staging` locally, considers it satisfied, and
+  # starts the old one. Everything looks successful; only /livez reveals it, reporting the
+  # commit of a build from days ago.
+  #
+  # Dokploy runs `up -d --build --remove-orphans` with the command fixed, so `--pull always`
+  # is not available and the policy is declared here instead.
+  pull_policy: always
   # Long enough for the graceful shutdown of 15 s (SHUTDOWN_TIMEOUT) to finish draining
   # before Docker sends SIGKILL.
   stop_grace_period: 30s

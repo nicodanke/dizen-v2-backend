@@ -1,0 +1,35 @@
+type: grpc_request
+model: grpc_request
+id: gr_identity_health_ping
+createdAt: 2026-08-30T14:17:18.018371
+updatedAt: 2026-09-02T16:04:34.657002
+workspaceId: wk_dizen
+folderId: fl_identity
+authenticationType: null
+authentication: {}
+description: ''
+message: '{}'
+metadata:
+- enabled: true
+  name: x-api-version
+  value: ${[ api_version ]}
+  id: null
+- enabled: true
+  name: x-device-id
+  value: yaak-local
+  id: null
+- enabled: true
+  name: x-platform
+  value: web
+  id: null
+method: HealthPing
+name: HealthPing (gRPC)
+service: dizen.identity.v1.HealthService
+sortPriority: 1.0
+url: ${[ identity_grpc ]}
+settingValidateCertificates:
+  enabled: true
+  value: true
+settingRequestMessageSize:
+  enabled: false
+  value: 67108864
