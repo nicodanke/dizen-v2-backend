@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
@@ -112,6 +113,8 @@ func (c *Consumer) Consume(ctx context.Context, handler Handler) error {
 	for {
 		select {
 		case <-ctx.Done():
+			c.drain(deliveries)
+
 			return nil
 
 		case delivery, ok := <-deliveries:
@@ -122,6 +125,43 @@ func (c *Consumer) Consume(ctx context.Context, handler Handler) error {
 			}
 
 			c.handle(ctx, delivery, handler)
+		}
+	}
+}
+
+// drainTimeout bounds how long a shutdown waits for the broker to finish canceling the
+// consumer. It is generous next to a graceful shutdown and short next to a hung one.
+const drainTimeout = 5 * time.Second
+
+// drain reads what is left on the deliveries channel until the library closes it.
+//
+// Returning from Consume without draining is a deadlock, and a quiet one. When the context
+// ends, the library cancels the consumer, and that cancellation travels on the same dispatch
+// loop that feeds this channel; an unread channel stalls the loop, so the cancellation is
+// never confirmed and the Close that follows waits for a reply that cannot arrive. Nothing
+// errors: the shutdown simply never finishes.
+//
+// The deliveries are discarded rather than handled, because the context they would run under
+// is already over. They were never acknowledged, so the broker redelivers them -- which is
+// the behavior the retry policy expects anyway.
+func (c *Consumer) drain(deliveries <-chan amqp.Delivery) {
+	timeout := time.NewTimer(drainTimeout)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case _, ok := <-deliveries:
+			if !ok {
+				return
+			}
+
+		case <-timeout.C:
+			c.log.Warn().
+				Str("queue", c.spec.Name).
+				Dur("after", drainTimeout).
+				Msg("gave up draining the consumer; the broker did not confirm the cancellation")
+
+			return
 		}
 	}
 }
