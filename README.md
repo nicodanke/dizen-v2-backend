@@ -209,11 +209,16 @@ make commit-check RANGE=HEAD         # the whole history
 
 ### What triggers a deployment
 
-Not a git push. Every git-based trigger -- a branch watcher, a tag you push by hand --
+Not a git push, and not before the pipeline is green. Every git-based trigger -- a branch watcher, a tag you push by hand --
 reacts to the git event, which happens *before* the images for that commit exist; the
 deployment would pull `manifest unknown` every time. Only something running after the build
 knows they are there, so `images.yml` gates its deploy job on all five images being
 published.
+
+The image build and the deploy are jobs of `ci.yml` and they `needs` every verification job,
+so nothing is published or deployed from a commit that failed lint, tests or the coverage
+gate. They used to live in a separate workflow, which meant they ran in parallel with the
+tests and could deploy a red commit -- the opposite of what acceptance criterion 1 asks for.
 
 | Event | Tag the workflow pushes | Dokploy pattern |
 |---|---|---|
