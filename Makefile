@@ -293,6 +293,10 @@ migrate-version: ## Show the applied version. Usage: make migrate-version SERVIC
 # API collection (Yaak)
 # ---------------------------------------------------------------------------
 
+.PHONY: grpc-check
+grpc-check: ## Verify gRPC over TLS against a deployed host. Usage: make grpc-check HOST=grpc.staging.v2.dizen.pro:443
+	@$(ROOT_DIR)/scripts/grpc-check.sh $(HOST)
+
 .PHONY: api-client
 api-client: ## Validate the versioned Yaak collection (RF-17c)
 	@$(ROOT_DIR)/scripts/api-client-check.sh
