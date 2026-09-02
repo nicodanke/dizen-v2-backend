@@ -72,7 +72,10 @@ services:
       REDISCLI_AUTH: ${REDIS_PASSWORD}
 
     ports:
-      - "127.0.0.1:6379:6379"
+      # Bound to the loopback of the host so it is reachable through an SSH tunnel and from
+      # nowhere else. The host side is a variable because two environments on one VPS are
+      # two containers competing for one port, and the second one simply does not start.
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
 
     volumes:
       - redis-data:/data

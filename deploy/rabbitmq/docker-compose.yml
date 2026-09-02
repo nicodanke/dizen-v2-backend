@@ -71,7 +71,10 @@ services:
       # AMQP is NOT published: the services reach it over dokploy-network by container name.
       # Only the management UI is bound, and only to the loopback of the host, so it is
       # reachable through an SSH tunnel and from nowhere else.
-      - "127.0.0.1:15672:15672"
+      #
+      # The host side is a variable because two environments on one VPS are two containers
+      # competing for one port, and the second one simply does not start.
+      - "127.0.0.1:${RABBITMQ_UI_PORT:-15672}:15672"
 
     volumes:
       - rabbitmq-data-2:/var/lib/rabbitmq
