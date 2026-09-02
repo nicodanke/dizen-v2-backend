@@ -23,7 +23,20 @@ networks:
     external: true
 
 volumes:
-  rabbitmq-data:
+  # The suffix is a generation counter, and it exists because of how RabbitMQ handles its
+  # credentials: RABBITMQ_DEFAULT_USER and RABBITMQ_DEFAULT_PASS are applied ONLY on the
+  # first boot, while the database is empty. Change them and redeploy over an existing
+  # volume and the broker keeps whatever it had -- or, if the variables were empty that
+  # first time, keeps no user at all and refuses every connection with `invalid
+  # credentials`.
+  #
+  # Bumping this number gives the next deployment a fresh volume, so the variables take
+  # effect, and it does so from git rather than from a command on the server. Nothing is
+  # lost: the exchange, the queues, the dead letter queues and the bindings are declared by
+  # the services when they start.
+  #
+  # The old volume is left behind. Remove it by hand once the new one is up.
+  rabbitmq-data-2:
 
 services:
   rabbitmq:
@@ -61,7 +74,7 @@ services:
       - "127.0.0.1:15672:15672"
 
     volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
+      - rabbitmq-data-2:/var/lib/rabbitmq
       # Read-only: the broker reads it at boot and has no reason to write it.
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
 
