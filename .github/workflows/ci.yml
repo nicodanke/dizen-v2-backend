@@ -269,8 +269,14 @@ jobs:
     # push. The commit messages were already checked on the pull request that produced this
     # commit.
     needs: [lint, contract, sqlc, secrets, test, coverage]
-    # Pull requests verify; they do not publish.
-    if: github.event_name == 'push'
+    # Only the refs that something actually deploys from.
+    #
+    # Pull requests verify; they do not publish. A push to main does not publish either:
+    # production deploys from a `v*` tag, which builds its own images, so building on main
+    # would push five images per merge that nothing ever pulls.
+    if: >-
+      github.event_name == 'push'
+      && (github.ref == 'refs/heads/staging' || github.ref_type == 'tag')
     permissions:
       contents: read
       packages: write
@@ -314,8 +320,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}/${{ matrix.service }}
           # What each ref produces:
           #   push to staging   -> :staging and :sha-<short>
-          #   push to main      -> :main    and :sha-<short>
-          #   tag v1.2.3        -> :v1.2.3, :1.2, :1
+          #   tag v1.2.3        -> :v1.2.3, :1.2, :1 and :sha-<short>
           # The moving tag is what Dokploy points at; the sha tag is what makes a rollback a
           # matter of naming an image rather than rebuilding an old commit.
           tags: |
@@ -368,6 +373,9 @@ jobs:
     name: deploy
     runs-on: ubuntu-latest
     needs: images
+    # Implied by `images` already, which does not run on any other ref. Kept because a
+    # deploy job whose conditions live only in another job is the kind of thing that gets
+    # loosened by accident.
     if: github.ref == 'refs/heads/staging' || github.ref_type == 'tag'
     permissions:
       contents: write
