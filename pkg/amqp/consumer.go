@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
 
@@ -33,6 +35,27 @@ type Consumer struct {
 	channel *amqp.Channel
 	spec    QueueSpec
 	log     zerolog.Logger
+
+	// tag names this consumer to the broker. It is ours rather than broker-assigned
+	// because canceling by tag is what lets this type, instead of the library, decide
+	// when the cancellation happens. See Consume.
+	tag string
+
+	// rpc serializes the channel operations that send a request and wait for its reply.
+	//
+	// amqp091's Channel.call does not serialize them: it takes the channel's single rpc
+	// channel and selects on it. Two concurrent callers are therefore two receivers on
+	// one channel, and the runtime hands each reply to whichever it picks -- so a cancel
+	// can be handed the reply to a close, discard it, and leave the close waiting for a
+	// frame the broker already sent. That deadlock is silent and lasts forever.
+	rpc sync.Mutex
+
+	// mu guards deliveries, which Consume sets and Close reads.
+	mu sync.Mutex
+
+	// deliveries is the channel the broker's messages arrive on, kept so that Close can
+	// keep reading it while it waits. See keepDrained.
+	deliveries <-chan amqp.Delivery
 }
 
 // NewConsumer declares the topology and opens a channel with the configured prefetch.
@@ -65,7 +88,7 @@ func NewConsumer(conn *Connection, spec QueueSpec, log zerolog.Logger) (*Consume
 		return nil, fmt.Errorf("setting the prefetch to %d: %w", conn.cfg.Prefetch, err)
 	}
 
-	return &Consumer{conn: conn, channel: channel, spec: spec, log: log}, nil
+	return &Consumer{conn: conn, channel: channel, spec: spec, log: log, tag: consumerTag(spec.Name)}, nil
 }
 
 // declareRetryQueue declares the queue that implements the backoff.
@@ -91,9 +114,22 @@ func declareRetryQueue(ch *amqp.Channel, queue string) error {
 	return nil
 }
 
+// consumerTag names a consumer to the broker. The queue makes it readable in the
+// management UI; the suffix makes it unique across processes and restarts.
+func consumerTag(queue string) string {
+	return queue + "-" + uuid.NewString()
+}
+
 // Consume reads messages until the context is canceled.
+//
+// The plain Consume is used rather than ConsumeWithContext, deliberately.
+// ConsumeWithContext starts a goroutine that calls Channel.Cancel when the context ends,
+// and that goroutine is outside this type's control: it can run at the same moment as
+// Close, and two concurrent waiters on one channel's rpc reply deadlock (see the rpc
+// field). Canceling here instead keeps every reply-waiting call on this channel under
+// one mutex.
 func (c *Consumer) Consume(ctx context.Context, handler Handler) error {
-	deliveries, err := c.channel.ConsumeWithContext(ctx, c.spec.Name, "", // broker-assigned tag
+	deliveries, err := c.channel.Consume(c.spec.Name, c.tag,
 		false, // manual acknowledgement: the retry policy depends on it
 		false, // not exclusive
 		false, // no-local is unsupported by RabbitMQ
@@ -104,6 +140,10 @@ func (c *Consumer) Consume(ctx context.Context, handler Handler) error {
 		return fmt.Errorf("consuming from %q: %w", c.spec.Name, err)
 	}
 
+	c.mu.Lock()
+	c.deliveries = deliveries
+	c.mu.Unlock()
+
 	c.log.Info().
 		Str("queue", c.spec.Name).
 		Int("prefetch", c.conn.cfg.Prefetch).
@@ -113,7 +153,7 @@ func (c *Consumer) Consume(ctx context.Context, handler Handler) error {
 	for {
 		select {
 		case <-ctx.Done():
-			c.drain(deliveries)
+			c.stop(deliveries)
 
 			return nil
 
@@ -129,36 +169,122 @@ func (c *Consumer) Consume(ctx context.Context, handler Handler) error {
 	}
 }
 
-// drainTimeout bounds how long a shutdown waits for the broker to finish canceling the
-// consumer. It is generous next to a graceful shutdown and short next to a hung one.
-const drainTimeout = 5 * time.Second
+// drainTimeout bounds the wait for a broker that never confirms the cancellation. It is a
+// safety net: a healthy cancellation takes milliseconds, so reaching this means something
+// is wrong, and blocking a shutdown forever is the worse of the two failures.
+const drainTimeout = 30 * time.Second
 
-// drain reads what is left on the deliveries channel until the library closes it.
+// keepDrained reads and discards deliveries in the background until the returned function
+// is called, which then waits for that reading to have stopped.
 //
-// Returning from Consume without draining is a deadlock, and a quiet one. When the context
-// ends, the library cancels the consumer, and that cancellation travels on the same dispatch
-// loop that feeds this channel; an unread channel stalls the loop, so the cancellation is
-// never confirmed and the Close that follows waits for a reply that cannot arrive. Nothing
-// errors: the shutdown simply never finishes.
+// This exists because of how amqp091 dispatches. One goroutine reads every frame off the
+// connection and hands each one to its destination, and it does so synchronously: a
+// delivery it cannot hand over, because nothing is reading the consumer's channel, stops
+// that goroutine entirely. Every other frame is then stuck behind it -- including the
+// replies that a cancel or a close is waiting for. The result is a deadlock with no error
+// and no timeout, and it is why both shutdown paths here drain before they wait.
+func (c *Consumer) keepDrained() (stop func()) {
+	c.mu.Lock()
+	deliveries := c.deliveries
+	c.mu.Unlock()
+
+	if deliveries == nil {
+		return func() {}
+	}
+
+	halt := make(chan struct{})
+	stopped := make(chan struct{})
+
+	go func() {
+		defer close(stopped)
+
+		for {
+			select {
+			case _, ok := <-deliveries:
+				if !ok {
+					return
+				}
+
+			case <-halt:
+				return
+			}
+		}
+	}()
+
+	return func() {
+		close(halt)
+		<-stopped
+	}
+}
+
+// stop cancels the consumer and drains what the broker had already sent.
 //
-// The deliveries are discarded rather than handled, because the context they would run under
-// is already over. They were never acknowledged, so the broker redelivers them -- which is
-// the behavior the retry policy expects anyway.
+// The order matters and is not the obvious one. Canceling first and draining afterwards
+// deadlocks: the library delivers through an intermediate goroutine that blocks writing to
+// an unread deliveries channel, and while it is blocked it cannot process the cancellation
+// that would close that channel. So the drain starts first and runs while the cancel is in
+// flight; the cancel then completes, the library closes the channel, and the drain ends.
+//
+// Whatever is drained was never acknowledged, so the broker redelivers it. That is the
+// same path a crashed consumer takes, and the retry policy already expects it.
+func (c *Consumer) stop(deliveries <-chan amqp.Delivery) {
+	drained := make(chan struct{})
+
+	go func() {
+		defer close(drained)
+
+		c.drain(deliveries)
+	}()
+
+	c.cancel()
+
+	<-drained
+}
+
+// cancel tells the broker to stop delivering, which is what closes the deliveries channel.
+func (c *Consumer) cancel() {
+	c.rpc.Lock()
+	defer c.rpc.Unlock()
+
+	// A channel closed underneath us -- a dropped connection -- has already canceled
+	// every consumer on it. Asking again would send on a closed channel.
+	if c.channel.IsClosed() {
+		return
+	}
+
+	if err := c.channel.Cancel(c.tag, false); err != nil {
+		c.log.Warn().Err(err).
+			Str("queue", c.spec.Name).
+			Msg("canceling the consumer")
+	}
+}
+
+// drain reads the deliveries channel until the library closes it.
 func (c *Consumer) drain(deliveries <-chan amqp.Delivery) {
 	timeout := time.NewTimer(drainTimeout)
 	defer timeout.Stop()
+
+	drained := 0
 
 	for {
 		select {
 		case _, ok := <-deliveries:
 			if !ok {
+				c.log.Debug().
+					Str("queue", c.spec.Name).
+					Int("redelivered", drained).
+					Msg("the consumer was canceled and its deliveries drained")
+
 				return
 			}
+
+			drained++
 
 		case <-timeout.C:
 			c.log.Warn().
 				Str("queue", c.spec.Name).
 				Dur("after", drainTimeout).
+				Int("redelivered", drained).
 				Msg("gave up draining the consumer; the broker did not confirm the cancellation")
 
 			return
@@ -303,7 +429,21 @@ func (c *Consumer) publishRaw(
 }
 
 // Close releases the consumer channel.
+//
+// It takes the same mutex as cancel so that a Close arriving while Consume is still
+// shutting down waits for that cancellation instead of racing it for the reply, and it
+// keeps the deliveries moving while it waits so that its own confirmation can reach it.
+//
+// Both are needed. Serializing alone still deadlocks when Close wins the mutex before
+// Consume has started draining: the close confirmation then queues behind a delivery that
+// nobody is reading.
 func (c *Consumer) Close() error {
+	release := c.keepDrained()
+	defer release()
+
+	c.rpc.Lock()
+	defer c.rpc.Unlock()
+
 	if err := c.channel.Close(); err != nil {
 		return fmt.Errorf("closing the consumer channel: %w", err)
 	}

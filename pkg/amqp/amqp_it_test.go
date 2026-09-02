@@ -75,7 +75,11 @@ func config(t *testing.T) amqp.Config {
 		MaxAttempts:    5,
 		InitialBackoff: 100 * time.Millisecond,
 		MaxBackoff:     300 * time.Millisecond,
-		PublishTimeout: 5 * time.Second,
+		// Well above the 5s production default on purpose. No test here asserts how
+		// long a confirm may take; what this bounds is how long a hung publish takes
+		// to report itself. Leaving it at the production value made the suite fail on
+		// a loaded machine for a reason that had nothing to do with the code.
+		PublishTimeout: 20 * time.Second,
 	}
 }
 
@@ -630,5 +634,72 @@ func TestCloseReturnsAfterTheContextEndsWithMessagesInFlight(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("Close blocked after the context ended: the deliveries were not drained")
+	}
+}
+
+// TestClosingWhileTheContextIsCanceledDoesNotDeadlock covers the shutdown order that
+// production actually uses: the context is canceled and the consumer is closed straight
+// after, without waiting for Consume to return.
+//
+// That overlap used to deadlock. The cancellation and the close each send a request and
+// wait for its reply, and amqp091 does not serialize them -- both end up receiving from the
+// channel's single rpc channel, and the runtime hands each reply to whichever it picks. A
+// cancel handed the reply meant for the close discards it, and the close then waits for a
+// frame the broker has already sent. Nothing times out and nothing logs: the process hangs
+// until something kills it, which in CI was the twelve-minute test timeout.
+//
+// It is a race, so one iteration proves nothing; the loop is what makes it show up.
+func TestClosingWhileTheContextIsCanceledDoesNotDeadlock(t *testing.T) {
+	cfg := config(t)
+	conn := connect(t, cfg)
+
+	queue := uniqueQueue(t)
+
+	for i := range 40 {
+		consumer, err := amqp.NewConsumer(conn, amqp.QueueSpec{
+			Name:        queue,
+			RoutingKeys: []string{"user.registered"},
+			Durable:     true,
+		}, logger.Nop())
+		if err != nil {
+			t.Fatalf("iteration %d: NewConsumer: %v", i, err)
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+
+		consuming := make(chan struct{})
+
+		go func() {
+			defer close(consuming)
+
+			_ = consumer.Consume(ctx, func(_ context.Context, _ amqp091.Delivery) error {
+				return nil
+			})
+		}()
+
+		// Long enough for basic.consume to have been confirmed, so the cancel below is a
+		// real cancellation rather than a no-op on a consumer that does not exist yet.
+		time.Sleep(50 * time.Millisecond)
+
+		cancel()
+
+		closed := make(chan error, 1)
+
+		go func() { closed <- consumer.Close() }()
+
+		select {
+		case err := <-closed:
+			if err != nil {
+				t.Fatalf("iteration %d: Close: %v", i, err)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatalf("iteration %d: Close blocked: it raced the cancellation for the reply", i)
+		}
+
+		select {
+		case <-consuming:
+		case <-time.After(20 * time.Second):
+			t.Fatalf("iteration %d: Consume did not return", i)
+		}
 	}
 }
