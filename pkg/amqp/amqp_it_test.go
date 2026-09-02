@@ -549,3 +549,86 @@ func TestTheConfiguredAttemptLimitIsHonored(t *testing.T) {
 		t.Errorf("the handler ran %d times, want 2: MaxAttempts did not reach the consumer", got)
 	}
 }
+
+// TestCloseReturnsAfterTheContextEndsWithMessagesInFlight is a regression test for a
+// shutdown that never finished.
+//
+// Consume used to return the moment the context ended, leaving the deliveries channel
+// unread. The library cancels the consumer when the context ends, and that cancellation
+// travels on the same dispatch loop that feeds the channel: an unread channel stalls the
+// loop, the cancellation is never confirmed, and Close waits forever for a reply that cannot
+// arrive. Nothing errors, which is what made it hard to see -- in CI it surfaced only as a
+// test binary killed at its timeout.
+//
+// The condition needs messages still in flight when the context ends, which is what the
+// prefetch and the blocked handler below arrange.
+func TestCloseReturnsAfterTheContextEndsWithMessagesInFlight(t *testing.T) {
+	cfg := config(t)
+	conn := connect(t, cfg)
+
+	queue := uniqueQueue(t)
+
+	consumer, err := amqp.NewConsumer(conn, amqp.QueueSpec{
+		Name:        queue,
+		RoutingKeys: []string{"user.registered"},
+		Durable:     true,
+	}, logger.Nop())
+	if err != nil {
+		t.Fatalf("NewConsumer: %v", err)
+	}
+
+	publisher, err := amqp.NewPublisher(conn)
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+
+	defer func() { _ = publisher.Close() }()
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	consuming := make(chan struct{})
+	blocked := make(chan struct{})
+
+	go func() {
+		defer close(consuming)
+
+		_ = consumer.Consume(ctx, func(_ context.Context, _ amqp091.Delivery) error {
+			// The first delivery parks here, so the ones behind it stay unread in the
+			// library's buffer -- which is the state that used to deadlock the close.
+			<-blocked
+
+			return nil
+		})
+	}()
+
+	time.Sleep(500 * time.Millisecond)
+
+	for range 5 {
+		if err := publisher.Publish(t.Context(), "user.registered", []byte(`{"user_id":"u1"}`)); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+
+	time.Sleep(time.Second)
+
+	cancel()
+	close(blocked)
+
+	select {
+	case <-consuming:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Consume did not return after the context ended")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- consumer.Close() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Close blocked after the context ended: the deliveries were not drained")
+	}
+}
