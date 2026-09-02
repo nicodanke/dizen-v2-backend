@@ -1,0 +1,37 @@
+type: http_request
+model: http_request
+id: hr_identity_livez
+createdAt: 2026-08-30T14:17:18.013196
+updatedAt: 2026-09-02T16:06:09.681105
+workspaceId: wk_dizen
+folderId: fl_identity
+authentication: {}
+authenticationType: null
+body: {}
+bodyType: null
+description: ''
+headers:
+- enabled: true
+  name: Accept
+  value: application/json
+  id: null
+method: GET
+name: Liveness
+sortPriority: 3.0
+url: ${[ identity_http ]}/livez
+urlParameters: []
+settingSendCookies:
+  enabled: false
+  value: true
+settingStoreCookies:
+  enabled: false
+  value: true
+settingValidateCertificates:
+  enabled: false
+  value: true
+settingFollowRedirects:
+  enabled: false
+  value: true
+settingRequestTimeout:
+  enabled: false
+  value: 0

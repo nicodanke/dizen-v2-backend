@@ -1,0 +1,41 @@
+type: http_request
+model: http_request
+id: hr_identity_health_ping
+createdAt: 2026-08-30T14:17:18.014610
+updatedAt: 2026-09-02T16:05:53.601713
+workspaceId: wk_dizen
+folderId: fl_identity
+authentication: {}
+authenticationType: null
+body: {}
+bodyType: null
+description: ''
+headers:
+- enabled: true
+  name: Accept
+  value: application/json
+  id: null
+- enabled: true
+  name: x-api-version
+  value: ${[ api_version ]}
+  id: null
+method: GET
+name: HealthPing (REST)
+sortPriority: 2.0
+url: ${[ identity_http ]}/v1/identity/health
+urlParameters: []
+settingSendCookies:
+  enabled: false
+  value: true
+settingStoreCookies:
+  enabled: false
+  value: true
+settingValidateCertificates:
+  enabled: false
+  value: true
+settingFollowRedirects:
+  enabled: false
+  value: true
+settingRequestTimeout:
+  enabled: false
+  value: 0

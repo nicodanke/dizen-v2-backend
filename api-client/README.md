@@ -60,9 +60,15 @@ the commit will be refused.
 
 ## These files belong to Yaak
 
-The name of each file is the resource `id`, which is what Directory Sync writes:
-`yaak.env_local.yaml`, `yaak.fl_tours.yaml`, `yaak.hr_identity_livez.yaml`. A file named
-anything else is one the app does not recognize as its own.
+**Do not rename them.** Yaak remembers the path of each resource and writes there. A renamed
+file is a path it does not follow: it becomes an orphan, and the next edit writes to the
+remembered path, leaving two files with the same `id` drifting apart. This was learned by
+renaming the whole collection to each resource's `id`; Yaak wrote it all back under the
+original names.
+
+The file name does not match the `id` inside it -- `yaak.http_request_livez.yaml` holds
+`id: hr_identity_livez` -- and that is fine: the `id` identifies the resource, the name does
+not. `make api-client` fails on two files sharing an `id`, which is how an orphan is caught.
 
 For the same reason, **the explanation lives here and not in the files**: Yaak rewrites them
 on every sync and any comment inside them is lost.

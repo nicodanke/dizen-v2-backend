@@ -1,0 +1,37 @@
+type: http_request
+model: http_request
+id: hr_identity_readyz
+createdAt: 2026-08-30T14:17:18.017072
+updatedAt: 2026-09-02T16:06:23.355296
+workspaceId: wk_dizen
+folderId: fl_identity
+authentication: {}
+authenticationType: null
+body: {}
+bodyType: null
+description: ''
+headers:
+- enabled: true
+  name: Accept
+  value: application/json
+  id: null
+method: GET
+name: Readiness
+sortPriority: 4.0
+url: ${[ identity_http ]}/readyz
+urlParameters: []
+settingSendCookies:
+  enabled: false
+  value: true
+settingStoreCookies:
+  enabled: false
+  value: true
+settingValidateCertificates:
+  enabled: false
+  value: true
+settingFollowRedirects:
+  enabled: false
+  value: true
+settingRequestTimeout:
+  enabled: false
+  value: 0

@@ -1,0 +1,10 @@
+# Commits up to and including this one predate the Conventional Commits check and are not
+# verified by it (tools/commitcheck).
+#
+# The alternative was rewriting messages that are already published, which would change every
+# SHA -- and those SHAs are not decoration here: each deployment is tagged deployed-staging-<sha>
+# and every image in GHCR carries a sha-<short> tag. Rewriting would orphan all of them to fix
+# four subjects, two of which were over the 72-character limit by five characters.
+#
+# Move it forward only to forgive a new batch, and only deliberately.
+5e812bf89d4beaf655fc43475ea1e98b7290d5d5

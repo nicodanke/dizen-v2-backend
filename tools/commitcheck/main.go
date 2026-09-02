@@ -79,6 +79,29 @@ const maxHeaderLength = 72
 // gitTimeout bounds the one outbound call this tool makes.
 const gitTimeout = 30 * time.Second
 
+// baselineFile names the commit before which the convention was not enforced. Everything
+// reachable from it is skipped: see the comments in the file itself for why forgiving them
+// beats rewriting published history.
+const baselineFile = ".commitcheck-baseline"
+
+// baseline reads the exempt commit, if there is one. A missing file is not an error: a
+// repository that never needed one should not have to carry it.
+func baseline() string {
+	raw, err := os.ReadFile(baselineFile)
+	if err != nil {
+		return ""
+	}
+
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			return line
+		}
+	}
+
+	return ""
+}
+
 func main() {
 	args := os.Args[1:]
 
@@ -144,7 +167,15 @@ func readRange(revisionRange string) ([]string, error) {
 
 	// The range comes from the caller: a make target or a CI job, never from a commit or a
 	// pull request title. It is passed as an argument to git, not to a shell.
-	cmd := exec.CommandContext(ctx, "git", "log", "--format=%B%x00", revisionRange) //nolint:gosec // the range is not user input
+	args := []string{"log", "--format=%B%x00", revisionRange}
+
+	// `--not <baseline>` excludes everything reachable from it, which is exactly "the commits
+	// that came before the rule".
+	if exempt := baseline(); exempt != "" {
+		args = append(args, "--not", exempt)
+	}
+
+	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // the range is not user input
 
 	out, err := cmd.Output()
 	if err != nil {
