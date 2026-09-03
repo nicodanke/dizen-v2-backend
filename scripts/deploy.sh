@@ -24,6 +24,32 @@ environment="${2:?usage: deploy.sh <tag> <environment>}"
 : "${DOKPLOY_API_KEY:?DOKPLOY_API_KEY is empty. Without it this job would report success and deploy nothing}"
 : "${DOKPLOY_COMPOSE_ID:?DOKPLOY_COMPOSE_ID is empty: the id of the ${environment} compose in Dokploy}"
 
+# Refuse to deploy a commit the branch has already moved past.
+#
+# Concurrency supersedes a run while it is still in flight, which covers the ordinary case:
+# a merge landing while an older run waits for its approval. It does not cover re-running an
+# old run from the GitHub UI, and that one is worse than it looks. The re-run's `images` job
+# republishes the moving tag -- `:staging`, `:production` -- pointing at the old commit, so
+# it does not merely deploy old code: it leaves the tag rewound, and the next deployment
+# from Dokploy picks up the old image too.
+#
+# A tag is exempt. It names one commit on purpose, and cutting a release is explicit.
+#
+# This is not the rollback path and does not block one. A rollback is done in Dokploy by
+# pointing IMAGE_TAG at a `sha-` or version tag, which needs no pipeline at all.
+if [ "${GITHUB_REF_TYPE}" = "branch" ]; then
+  git fetch --no-tags --quiet origin "$GITHUB_REF_NAME"
+  tip="$(git rev-parse FETCH_HEAD)"
+
+  if [ "$tip" != "$GITHUB_SHA" ]; then
+    echo "::error::refusing to deploy ${GITHUB_SHA:0:7}: ${GITHUB_REF_NAME} is now at ${tip:0:7}" >&2
+    echo "A newer commit is on ${GITHUB_REF_NAME}, so this run is superseded. Deploying it" >&2
+    echo "would rewind the moving image tag to an older build. To roll back, point" >&2
+    echo "IMAGE_TAG at a sha- tag in Dokploy instead." >&2
+    exit 1
+  fi
+fi
+
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
