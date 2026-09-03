@@ -270,6 +270,20 @@ jobs:
   # tests and could publish and deploy a red commit.
   # =========================================================================
 
+  # Gates the build, not just the deploy. Re-running an old run from the GitHub UI is not
+  # superseded by concurrency -- there is no newer run to cancel it -- and its `images` job
+  # would republish `:staging` or `:production` pointing at the old commit, rewinding the tag
+  # for every later deployment rather than only for that run.
+  current:
+    name: commit is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: ./scripts/check-current.sh
+
   images:
     # The matrix value is in the name, or the five runs are indistinguishable in the UI.
     name: image (${{ matrix.service }})
@@ -279,7 +293,7 @@ jobs:
     # skipped dependency skips its dependents, which would mean nothing ever publishes on a
     # push. The commit messages were already checked on the pull request that produced this
     # commit.
-    needs: [lint, contract, sqlc, secrets, test, coverage]
+    needs: [current, lint, contract, sqlc, secrets, test, coverage]
     # Pull requests verify; they do not publish. Everything else that gets here is a ref
     # something deploys from: the `on:` triggers admit only `main`, `staging` and `v*`.
     if: github.event_name == 'push'

@@ -55,10 +55,10 @@ Every image is published as `sha-<short>` as well as the moving tag, and release
 No pipeline, no rebuild, no waiting for a compile. Set `IMAGE_TAG` back to `production` once
 the fix ships forward.
 
-**Do not roll back by re-running an old pipeline run.** Its `images` job republishes the
-moving tag pointing at the old commit, which rewinds `:production` for everyone including
-the next deploy from Dokploy. The deploy step refuses a commit the branch has moved past,
-but the images job runs before it, so the tag is already rewound by then.
+**Re-running an old pipeline run is not a rollback, and the pipeline refuses it.** The
+`commit is current` job stops a run whose commit the branch has moved past, before anything
+is built: its `images` job would otherwise republish the moving tag pointing at the old
+commit, rewinding `:production` for every later deployment and not just that run.
 
 **A migration that is not backwards compatible cannot be rolled back this way.** The rule is
 that every migration must work against the previous version of the code; when it cannot, it
