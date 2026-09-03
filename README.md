@@ -241,7 +241,7 @@ and the cache on every unrelated commit.
 | Workflow | Fires on | Does |
 |---|---|---|
 | `publish-contract` | a push to `main` touching `proto/` | tags `api-vX.Y.Z`, publishes the OpenAPI as a release artifact, and asks `dizen-v2-mobile` and `dizen-v2-web` for their bump pull request |
-| `release` | a `v*` tag on `main` | changelog, GitHub release, and the production deployment webhook of Dokploy |
+| `release` | a `v*` tag on `main` | changelog and GitHub release. It does NOT deploy: the same tag also runs `ci.yml`, which builds the images and then pushes `deployed-v1.2.3`, and that is what Dokploy reacts to |
 
 The contract version is independent of the version of the services: `v1.4.0` is a release of
 this backend, `api-v1.4.0` is a state of the API that the two clients pin themselves to. The
