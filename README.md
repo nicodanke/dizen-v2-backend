@@ -223,7 +223,16 @@ tests and could deploy a red commit -- the opposite of what acceptance criterion
 | Event | Tag the workflow pushes | Image tag that moves | Dokploy project |
 |---|---|---|---|
 | push to `staging` | `deployed-staging-<sha>` | `:staging` | branch `staging`, trigger on tag |
+| merge to `main` | `deployed-production-<sha>` | `:production` | branch `main`, trigger on tag |
 | tag `v1.2.3` | `deployed-v1.2.3` | `:production` | branch `main`, trigger on tag |
+
+Production works exactly like staging, with one difference: the job that pushes its tag runs
+against the `production` GitHub environment, and required reviewers on that environment hold
+it until someone approves. The images are already built by then, so approving is a click.
+There is no automatic version number, and that is deliberate -- a tag pushed with the
+`GITHUB_TOKEN` does not trigger workflows, so a generated `v*` tag would build nothing.
+Cutting a `v*` tag by hand still works and takes the same path, for when a release deserves
+a name.
 
 Dokploy has no field for a tag pattern: what separates the two is the branch each project is
 configured against, since a `deployed-staging-*` tag sits on a commit of `staging` and a
