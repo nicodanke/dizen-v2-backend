@@ -220,11 +220,11 @@ so nothing is published or deployed from a commit that failed lint, tests or the
 gate. They used to live in a separate workflow, which meant they ran in parallel with the
 tests and could deploy a red commit -- the opposite of what acceptance criterion 1 asks for.
 
-| Event | Tag it leaves | Image tag that moves | Deployed by |
+| Event | Tag it leaves | Image tag that moves | Deploys |
 |---|---|---|---|
-| push to `staging` | `deployed-staging-<sha>` | `:staging` | `DOKPLOY_WEBHOOK_STAGING` |
-| merge to `main` | `deployed-production-<sha>` | `:production` | `DOKPLOY_WEBHOOK_PRODUCTION` |
-| tag `v1.2.3` | `deployed-v1.2.3` | `:production` | `DOKPLOY_WEBHOOK_PRODUCTION` |
+| push to `staging` | `deployed-staging-<sha>` | `:staging` | the staging compose |
+| merge to `main` | `deployed-production-<sha>` | `:production` | the production compose |
+| tag `v1.2.3` | `deployed-v1.2.3` | `:production` | the production compose |
 
 **None of Dokploy's own triggers are used** (D-44). All of them react to a git event, which
 happens before the images of that commit exist, so a deployment keyed off one pulls
@@ -238,9 +238,14 @@ it watches, so anyone with write access could change what production runs, witho
 the approval below. The GitHub Actions app cannot be added to a ruleset's bypass list, so
 that branch could not be protected without also blocking the pipeline.
 
-The webhook has neither problem. Its URL is a repository secret, reachable only by a
-workflow, and what a leaked one buys is a redeploy of the configuration Dokploy already has
--- not a way to choose what gets deployed.
+So the pipeline calls Dokploy's API instead, naming the compose to deploy by id and
+authenticating with `DOKPLOY_API_KEY`. It depends on no project setting, so Autodeploy stays
+off on both projects and there is nothing left that can deploy from a git event. Dokploy's
+own provider webhook is not used either: it is governed by those same settings, and answers
+400 to anything that is not a git provider's payload.
+
+`freshVolumes` is always false. The API's example shows `true`, which recreates the volumes
+from scratch -- on production that is deleting data in order to deploy.
 
 The `deployed-*` tags stay. They trigger nothing; they are the record of which commit went
 out and when.

@@ -389,7 +389,11 @@ jobs:
 
       - name: Deploy
         env:
-          DOKPLOY_WEBHOOK: ${{ secrets.DOKPLOY_WEBHOOK_STAGING }}
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          # The id of the compose in Dokploy. An identifier, not a credential: on its own it
+          # grants nothing, and the API key next to it is what does.
+          DOKPLOY_COMPOSE_ID: jyc5vguGgQDxfsNTNn5gn
         run: |
           tag="deployed-staging-${GITHUB_SHA:0:7}"
           "${GITHUB_WORKSPACE}/scripts/deploy.sh" "$tag" staging
@@ -419,7 +423,9 @@ jobs:
 
       - name: Deploy
         env:
-          DOKPLOY_WEBHOOK: ${{ secrets.DOKPLOY_WEBHOOK_PRODUCTION }}
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_COMPOSE_ID: rhOiyFEOJ9quctXp0qRqD
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tag="deployed-${GITHUB_REF_NAME}"
