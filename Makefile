@@ -248,11 +248,11 @@ seed: ## Load sample data into the local environment
 # ---------------------------------------------------------------------------
 
 .PHONY: jwt-key
-jwt-key: ## Generate an Ed25519 key pair for a local .env
+jwt-key: ## Generate an Ed25519 key pair on one line, for Doppler and .env
 	@$(ROOT_DIR)/scripts/jwt-key.sh
 
 .PHONY: jwt-key-pem
-jwt-key-pem: ## Generate an Ed25519 key pair as real PEM, for Doppler
+jwt-key-pem: ## Generate an Ed25519 key pair as real multi-line PEM, for a file
 	@$(ROOT_DIR)/scripts/jwt-key.sh -pem
 
 .PHONY: sqlc
