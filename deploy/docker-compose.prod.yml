@@ -111,9 +111,6 @@ networks:
   dokploy-network:
     external: true
 
-volumes:
-  valhalla-tiles:
-
 services:
   # =========================================================================
   # Services
@@ -201,9 +198,6 @@ services:
       SERVICE_NAME: tours
       DATABASE_URL: ${TOURS_DATABASE_URL}
       REDIS_NAMESPACE: tours
-      # Only tours talks to the router, and only during authoring (07 section 3.2). Empty in
-      # production, where Valhalla does not run.
-      VALHALLA_URL: ${VALHALLA_URL:-}
     labels:
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
@@ -370,78 +364,3 @@ services:
           memory: 512M
         reservations:
           memory: 64M
-
-  # =========================================================================
-  # Authoring: routing and tiles (RF-3b, doc 07)
-  #
-  # Neither is on dokploy-network, so neither is reachable from the internet or from the v1
-  # stack: Valhalla is consumed by `tours` over the internal network and by nothing else.
-  # Both are behind profiles and run in staging only -- the dashboard is their only user, and
-  # a re-import must not compete for CPU with user traffic (07 section 7).
-  #
-  #   docker compose --profile authoring up -d
-  # =========================================================================
-  valhalla:
-    <<: *logging
-    profiles: [authoring]
-    # Pinned: the tile format has to match the binary that reads it, and `latest` silently
-    # invalidates a build that takes half an hour.
-    image: ghcr.io/gis-ops/docker-valhalla/valhalla:3.5.1
-    restart: unless-stopped
-    networks: [internal]
-    environment:
-      # The regional OSM extract from Geofabrik. Changing it rebuilds the tiles on the next
-      # start, which takes minutes to hours depending on the size.
-      tile_urls: ${VALHALLA_TILE_URL}
-      serve_tiles: "True"
-      build_tar: "True"
-      # Elevation multiplies disk and build time, and the tour profiles do not use it yet.
-      build_elevation: "False"
-      build_admins: "True"
-      build_time_zones: "True"
-      force_rebuild: "False"
-    volumes:
-      - valhalla-tiles:/custom_files
-    deploy:
-      resources:
-        limits:
-          # 07 section 3.2 budgets 2-4 GB for a regional extract. The ceiling is explicit so
-          # a rebuild cannot take the VPS -- and the v1 stack on it -- down with it.
-          cpus: "2.0"
-          memory: 4G
-        reservations:
-          memory: 1G
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8002/status || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      # The first start builds the tiles from the extract, measured in minutes. Until it
-      # finishes the container is starting, not unhealthy.
-      start_period: 30m
-
-  # One-shot job, not a service: it produces a .pmtiles file and exits (07 section 4.2). Run
-  # on demand, or monthly from the scheduler, never on every deployment.
-  #
-  #   docker compose --profile tiles run --rm planetiler
-  #
-  # The upload to R2 is a separate step, because that is where the bucket credentials live
-  # and this container has no reason to hold them.
-  planetiler:
-    <<: *logging
-    profiles: [tiles]
-    image: ghcr.io/onthegomap/planetiler:0.9.0
-    restart: "no"
-    networks: [internal]
-    command:
-      - --download
-      - --area=${PLANETILER_AREA}
-      - --output=/data/tiles/${PLANETILER_AREA}.pmtiles
-      - --force
-    volumes:
-      - valhalla-tiles:/data
-    deploy:
-      resources:
-        limits:
-          cpus: "2.0"
-          memory: 4G

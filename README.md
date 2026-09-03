@@ -220,12 +220,19 @@ so nothing is published or deployed from a commit that failed lint, tests or the
 gate. They used to live in a separate workflow, which meant they ran in parallel with the
 tests and could deploy a red commit -- the opposite of what acceptance criterion 1 asks for.
 
-| Event | Tag the workflow pushes | Dokploy pattern |
-|---|---|---|
-| push to `staging` | `deployed-staging-<sha>` | `deployed-staging-*` |
-| tag `v1.2.3` | `deployed-v1.2.3` | `deployed-v*` |
+| Event | Tag the workflow pushes | Image tag that moves | Dokploy project |
+|---|---|---|---|
+| push to `staging` | `deployed-staging-<sha>` | `:staging` | branch `staging`, trigger on tag |
+| tag `v1.2.3` | `deployed-v1.2.3` | `:production` | branch `main`, trigger on tag |
 
-The two patterns do not overlap, so one environment cannot pick up the other's tag. Because
+Dokploy has no field for a tag pattern: what separates the two is the branch each project is
+configured against, since a `deployed-staging-*` tag sits on a commit of `staging` and a
+`deployed-v*` tag on one of `main`.
+
+Each environment points `IMAGE_TAG` at its moving tag and never edits it. Pinning production
+to `v1.2.3` was the original design and it does not work: the deploy is triggered by the tag
+the workflow pushes, so a pinned value makes the trigger and the version run two different
+things, and the deploy reinstalls the previous release. Because
 the trigger is a ref rather than a URL there is no unauthenticated webhook and no secret to
 keep, and the deployment leaves a trace in the history saying which commit went out and when.
 
@@ -241,7 +248,7 @@ and the cache on every unrelated commit.
 | Workflow | Fires on | Does |
 |---|---|---|
 | `publish-contract` | a push to `main` touching `proto/` | tags `api-vX.Y.Z`, publishes the OpenAPI as a release artifact, and asks `dizen-v2-mobile` and `dizen-v2-web` for their bump pull request |
-| `release` | a `v*` tag on `main` | changelog, GitHub release, and the production deployment webhook of Dokploy |
+| `release` | a `v*` tag on `main` | changelog and GitHub release. It does NOT deploy: the same tag also runs `ci.yml`, which builds the images and then pushes `deployed-v1.2.3`, and that is what Dokploy reacts to |
 
 The contract version is independent of the version of the services: `v1.4.0` is a release of
 this backend, `api-v1.4.0` is a state of the API that the two clients pin themselves to. The

@@ -320,7 +320,18 @@ jobs:
           images: ghcr.io/${{ github.repository }}/${{ matrix.service }}
           # What each ref produces:
           #   push to staging   -> :staging and :sha-<short>
-          #   tag v1.2.3        -> :v1.2.3, :1.2, :1 and :sha-<short>
+          #   tag v1.2.3        -> :v1.2.3, :1.2, :1, :production and :sha-<short>
+          #
+          # `:production` is the moving tag that environment points at, the counterpart of
+          # `:staging`. Without it production could not deploy on its own: IMAGE_TAG would
+          # have to be edited to name each new release, so the tag that triggers the deploy
+          # and the version it runs would be two different things, and an automatic deploy
+          # would redeploy the PREVIOUS release. It only ever moves on a `v*` tag, which is
+          # already the deliberate act -- there is nothing to gate that cutting the release
+          # did not already gate.
+          #
+          # Which release is actually running stays answerable: VERSION is baked in at build
+          # time, so the service reports `v1.2.3` on /livez no matter which tag pulled it.
           # The moving tag is what Dokploy points at; the sha tag is what makes a rollback a
           # matter of naming an image rather than rebuilding an old commit.
           tags: |
@@ -329,6 +340,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
+            type=raw,value=production,enable=${{ github.ref_type == 'tag' }}
             type=sha,prefix=sha-
 
       - name: Build and push
