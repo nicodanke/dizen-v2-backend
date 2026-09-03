@@ -8,6 +8,9 @@ Product and architecture documentation lives outside this repository, in
 [`../dizen-product/docs`](../dizen-product/docs) (in Spanish). The required reading is
 `01-arquitectura-tecnica.md`, `02-modelo-de-datos.md` and `03-api-contratos-grpc.md`.
 
+Operating what is deployed -- deploying, rolling back, rotating a secret, and what the
+failures we have already hit look like -- is [`RUNBOOK.md`](RUNBOOK.md).
+
 ## Requirements
 
 | | |
