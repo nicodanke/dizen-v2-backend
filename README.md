@@ -220,16 +220,24 @@ so nothing is published or deployed from a commit that failed lint, tests or the
 gate. They used to live in a separate workflow, which meant they ran in parallel with the
 tests and could deploy a red commit -- the opposite of what acceptance criterion 1 asks for.
 
-| Event | Tag the workflow pushes | Image tag that moves | Dokploy project |
-|---|---|---|---|
-| push to `staging` | `deployed-staging-<sha>` | `:staging` | branch `staging`, trigger on tag |
-| merge to `main` | `deployed-production-<sha>` | `:production` | branch `main`, trigger on tag |
-| tag `v1.2.3` | `deployed-v1.2.3` | `:production` | branch `main`, trigger on tag |
+| Event | Branch the workflow moves | Tag it leaves | Image tag that moves | Dokploy project |
+|---|---|---|---|---|
+| push to `staging` | `deploy-staging` | `deployed-staging-<sha>` | `:staging` | branch `deploy-staging`, on push |
+| merge to `main` | `deploy-production` | `deployed-production-<sha>` | `:production` | branch `deploy-production`, on push |
+| tag `v1.2.3` | `deploy-production` | `deployed-v1.2.3` | `:production` | branch `deploy-production`, on push |
 
-Production works exactly like staging, with one difference: the job that pushes its tag runs
-against the `production` GitHub environment, and required reviewers on that environment hold
-it until someone approves. The images are already built by then, so approving is a click.
-There is no automatic version number, and that is deliberate -- a tag pushed with the
+**Dokploy watches a branch, not a tag** (D-43). Its tag trigger does not filter by name: with
+both projects set to "on tag", every tag deployed both environments. Its branch trigger does
+filter, and the race that made us leave it -- deploying on the git event, before the images
+exist -- is gone now that the branch is moved by CI once they are published.
+
+The tags stay, for the record of which commit went out and when, which a moving branch does
+not preserve.
+
+Production works exactly like staging, with one difference: the job that moves its branch
+runs against the `production` GitHub environment, and required reviewers on it hold the job
+until someone approves. The images are already built by then, so approving is a click. There
+is no automatic version number, and that is deliberate -- a tag pushed with the
 `GITHUB_TOKEN` does not trigger workflows, so a generated `v*` tag would build nothing.
 Cutting a `v*` tag by hand still works and takes the same path, for when a release deserves
 a name.
