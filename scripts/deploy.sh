@@ -49,30 +49,23 @@ JSON
 
 echo "==> ${tag} tagged; asking Dokploy to deploy ${environment}"
 
-# Dokploy's OpenAPI page lists the path as /compose.deploy, without saying whether the server
-# base includes /api. Rather than guess and lose a ten minute pipeline to a 404, try the
-# documented base first and fall back once. The one that answers is printed.
-call() {
-  curl -sS -o /tmp/dokploy.out -w '%{http_code}' \
-    -X POST \
-    -H "x-api-key: ${DOKPLOY_API_KEY}" \
-    -H 'Content-Type: application/json' \
-    -d "$body" \
-    --max-time 60 \
-    --retry 3 \
-    --retry-delay 5 \
-    --retry-all-errors \
-    "$1"
-}
+# Dokploy's OpenAPI page lists this as /compose.deploy and does not say whether the server
+# base includes /api. It does. Verified against the running instance rather than assumed,
+# and pinned here: a fallback that tries the other path would turn a 404 -- the endpoint
+# moved, the API changed -- into the error message of a second call that was never going to
+# work either, which is the wrong thing to be told when it breaks.
+endpoint="${DOKPLOY_URL%/}/api/compose.deploy"
 
-base="${DOKPLOY_URL%/}"
-endpoint="${base}/api/compose.deploy"
-status="$(call "$endpoint")"
-
-if [ "$status" = "404" ]; then
-  endpoint="${base}/compose.deploy"
-  status="$(call "$endpoint")"
-fi
+status="$(curl -sS -o /tmp/dokploy.out -w '%{http_code}' \
+  -X POST \
+  -H "x-api-key: ${DOKPLOY_API_KEY}" \
+  -H 'Content-Type: application/json' \
+  -d "$body" \
+  --max-time 60 \
+  --retry 3 \
+  --retry-delay 5 \
+  --retry-all-errors \
+  "$endpoint")"
 
 if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
   echo "::error::Dokploy answered ${status} deploying ${environment}" >&2
@@ -81,4 +74,4 @@ if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
   exit 1
 fi
 
-echo "==> Dokploy accepted the request (${status} from ${endpoint#"$base"})"
+echo "==> Dokploy accepted the request (${status})"
