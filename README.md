@@ -220,16 +220,40 @@ so nothing is published or deployed from a commit that failed lint, tests or the
 gate. They used to live in a separate workflow, which meant they ran in parallel with the
 tests and could deploy a red commit -- the opposite of what acceptance criterion 1 asks for.
 
-| Event | Tag the workflow pushes | Image tag that moves | Dokploy project |
+| Event | Tag it leaves | Image tag that moves | Deploys |
 |---|---|---|---|
-| push to `staging` | `deployed-staging-<sha>` | `:staging` | branch `staging`, trigger on tag |
-| merge to `main` | `deployed-production-<sha>` | `:production` | branch `main`, trigger on tag |
-| tag `v1.2.3` | `deployed-v1.2.3` | `:production` | branch `main`, trigger on tag |
+| push to `staging` | `deployed-staging-<sha>` | `:staging` | the staging compose |
+| merge to `main` | `deployed-production-<sha>` | `:production` | the production compose |
+| tag `v1.2.3` | `deployed-v1.2.3` | `:production` | the production compose |
 
-Production works exactly like staging, with one difference: the job that pushes its tag runs
-against the `production` GitHub environment, and required reviewers on that environment hold
-it until someone approves. The images are already built by then, so approving is a click.
-There is no automatic version number, and that is deliberate -- a tag pushed with the
+**None of Dokploy's own triggers are used** (D-44). All of them react to a git event, which
+happens before the images of that commit exist, so a deployment keyed off one pulls
+`manifest unknown`. The pipeline calls Dokploy after publishing instead, which is the only
+moment that is safe.
+
+Its tag trigger was tried first and does not filter by name: with both projects on "on tag",
+every tag deployed both environments. A branch per environment was tried next and does
+filter, but it makes the branch a deploy button -- Dokploy reads the compose from the branch
+it watches, so anyone with write access could change what production runs, without passing
+the approval below. The GitHub Actions app cannot be added to a ruleset's bypass list, so
+that branch could not be protected without also blocking the pipeline.
+
+So the pipeline calls Dokploy's API instead, naming the compose to deploy by id and
+authenticating with `DOKPLOY_API_KEY`. It depends on no project setting, so Autodeploy stays
+off on both projects and there is nothing left that can deploy from a git event. Dokploy's
+own provider webhook is not used either: it is governed by those same settings, and answers
+400 to anything that is not a git provider's payload.
+
+`freshVolumes` is always false. The API's example shows `true`, which recreates the volumes
+from scratch -- on production that is deleting data in order to deploy.
+
+The `deployed-*` tags stay. They trigger nothing; they are the record of which commit went
+out and when.
+
+Production works exactly like staging, with one difference: the job that moves its branch
+runs against the `production` GitHub environment, and required reviewers on it hold the job
+until someone approves. The images are already built by then, so approving is a click. There
+is no automatic version number, and that is deliberate -- a tag pushed with the
 `GITHUB_TOKEN` does not trigger workflows, so a generated `v*` tag would build nothing.
 Cutting a `v*` tag by hand still works and takes the same path, for when a release deserves
 a name.
