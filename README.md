@@ -220,19 +220,30 @@ so nothing is published or deployed from a commit that failed lint, tests or the
 gate. They used to live in a separate workflow, which meant they ran in parallel with the
 tests and could deploy a red commit -- the opposite of what acceptance criterion 1 asks for.
 
-| Event | Branch the workflow moves | Tag it leaves | Image tag that moves | Dokploy project |
-|---|---|---|---|---|
-| push to `staging` | `deploy-staging` | `deployed-staging-<sha>` | `:staging` | branch `deploy-staging`, on push |
-| merge to `main` | `deploy-production` | `deployed-production-<sha>` | `:production` | branch `deploy-production`, on push |
-| tag `v1.2.3` | `deploy-production` | `deployed-v1.2.3` | `:production` | branch `deploy-production`, on push |
+| Event | Tag it leaves | Image tag that moves | Deployed by |
+|---|---|---|---|
+| push to `staging` | `deployed-staging-<sha>` | `:staging` | `DOKPLOY_WEBHOOK_STAGING` |
+| merge to `main` | `deployed-production-<sha>` | `:production` | `DOKPLOY_WEBHOOK_PRODUCTION` |
+| tag `v1.2.3` | `deployed-v1.2.3` | `:production` | `DOKPLOY_WEBHOOK_PRODUCTION` |
 
-**Dokploy watches a branch, not a tag** (D-43). Its tag trigger does not filter by name: with
-both projects set to "on tag", every tag deployed both environments. Its branch trigger does
-filter, and the race that made us leave it -- deploying on the git event, before the images
-exist -- is gone now that the branch is moved by CI once they are published.
+**None of Dokploy's own triggers are used** (D-44). All of them react to a git event, which
+happens before the images of that commit exist, so a deployment keyed off one pulls
+`manifest unknown`. The pipeline calls Dokploy after publishing instead, which is the only
+moment that is safe.
 
-The tags stay, for the record of which commit went out and when, which a moving branch does
-not preserve.
+Its tag trigger was tried first and does not filter by name: with both projects on "on tag",
+every tag deployed both environments. A branch per environment was tried next and does
+filter, but it makes the branch a deploy button -- Dokploy reads the compose from the branch
+it watches, so anyone with write access could change what production runs, without passing
+the approval below. The GitHub Actions app cannot be added to a ruleset's bypass list, so
+that branch could not be protected without also blocking the pipeline.
+
+The webhook has neither problem. Its URL is a repository secret, reachable only by a
+workflow, and what a leaked one buys is a redeploy of the configuration Dokploy already has
+-- not a way to choose what gets deployed.
+
+The `deployed-*` tags stay. They trigger nothing; they are the record of which commit went
+out and when.
 
 Production works exactly like staging, with one difference: the job that moves its branch
 runs against the `production` GitHub environment, and required reviewers on it hold the job

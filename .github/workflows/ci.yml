@@ -387,12 +387,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Tag the commit as deployable
+      - name: Deploy
+        env:
+          DOKPLOY_WEBHOOK: ${{ secrets.DOKPLOY_WEBHOOK_STAGING }}
         run: |
           tag="deployed-staging-${GITHUB_SHA:0:7}"
-          "${GITHUB_WORKSPACE}/scripts/deploy-tag.sh" "$tag" staging
+          "${GITHUB_WORKSPACE}/scripts/deploy.sh" "$tag" staging
 
-  # Production is the same mechanism as staging with a person in front of it.
+  # Production is the same mechanism as staging with a person in front of it, and the only
+  # place a human decision sits in the whole chain.
   #
   # The `production` environment is what holds the deploy: with required reviewers on it,
   # GitHub pauses this job until someone approves. The images are already built and pushed
@@ -414,7 +417,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Tag the commit as deployable
+      - name: Deploy
+        env:
+          DOKPLOY_WEBHOOK: ${{ secrets.DOKPLOY_WEBHOOK_PRODUCTION }}
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tag="deployed-${GITHUB_REF_NAME}"
@@ -422,4 +427,4 @@ jobs:
             tag="deployed-production-${GITHUB_SHA:0:7}"
           fi
 
-          "${GITHUB_WORKSPACE}/scripts/deploy-tag.sh" "$tag" production
+          "${GITHUB_WORKSPACE}/scripts/deploy.sh" "$tag" production
