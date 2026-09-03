@@ -87,10 +87,18 @@ released on another, so it protects nothing, and it fails rarely and at the wors
 
 ## Restore a backup
 
-**Not armed yet.** The `backup` service exists behind the `backup` profile in
-`deploy/docker-compose.prod.yml` and is not enabled in either environment (RF-9 is open).
-Until it is, the recovery path is Neon's own point-in-time restore, which covers the
-databases but is the same provider holding them.
+**Deliberately not armed** (D-45). The `backup` service exists behind the `backup` profile
+in `deploy/docker-compose.prod.yml` and is enabled in neither environment: off-site copies
+were deferred on cost, knowing what that leaves uncovered.
+
+**So the recovery path today is Neon's point-in-time restore**, in the Neon console, within
+its retention window. That covers the five databases, which is where all the real data is:
+the production compose declares no volumes, RabbitMQ re-declares its exchange, queues and
+bindings at startup, and Redis holds nothing any service reads yet. What it does not cover
+is losing the Neon account itself.
+
+Revisit when media storage lands -- an audio file an author uploaded is in no database --
+or when tour content stops being something you could rebuild by hand.
 
 Once enabled, the drill and the restore are:
 
