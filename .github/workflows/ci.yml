@@ -269,14 +269,9 @@ jobs:
     # push. The commit messages were already checked on the pull request that produced this
     # commit.
     needs: [lint, contract, sqlc, secrets, test, coverage]
-    # Only the refs that something actually deploys from.
-    #
-    # Pull requests verify; they do not publish. A push to main does not publish either:
-    # production deploys from a `v*` tag, which builds its own images, so building on main
-    # would push five images per merge that nothing ever pulls.
-    if: >-
-      github.event_name == 'push'
-      && (github.ref == 'refs/heads/staging' || github.ref_type == 'tag')
+    # Pull requests verify; they do not publish. Everything else that gets here is a ref
+    # something deploys from: the `on:` triggers admit only `main`, `staging` and `v*`.
+    if: github.event_name == 'push'
     permissions:
       contents: read
       packages: write
@@ -319,8 +314,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}/${{ matrix.service }}
           # What each ref produces:
-          #   push to staging   -> :staging and :sha-<short>
-          #   tag v1.2.3        -> :v1.2.3, :1.2, :1, :production and :sha-<short>
+          #   push to staging   -> :staging, :sha-<short>
+          #   push to main      -> :main, :production, :sha-<short>
+          #   tag v1.2.3        -> :v1.2.3, :1.2, :1, :production, :sha-<short>
           #
           # `:production` is the moving tag that environment points at, the counterpart of
           # `:staging`. Without it production could not deploy on its own: IMAGE_TAG would
@@ -340,7 +336,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=production,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=production,enable=${{ github.ref_type == 'tag' || github.ref == 'refs/heads/main' }}
             type=sha,prefix=sha-
 
       - name: Build and push
@@ -381,14 +377,38 @@ jobs:
   # secret to keep: the deployment leaves a trace saying which commit went out and when.
   #
   # Dokploy's own branch auto-deploy must be OFF on every project.
-  deploy:
-    name: deploy
+  deploy-staging:
+    name: deploy (staging)
     runs-on: ubuntu-latest
     needs: images
-    # Implied by `images` already, which does not run on any other ref. Kept because a
-    # deploy job whose conditions live only in another job is the kind of thing that gets
-    # loosened by accident.
-    if: github.ref == 'refs/heads/staging' || github.ref_type == 'tag'
+    if: github.ref == 'refs/heads/staging'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag the commit as deployable
+        run: |
+          tag="deployed-staging-${GITHUB_SHA:0:7}"
+          "${GITHUB_WORKSPACE}/scripts/deploy-tag.sh" "$tag" staging
+
+  # Production is the same mechanism as staging with a person in front of it.
+  #
+  # The `production` environment is what holds the deploy: with required reviewers on it,
+  # GitHub pauses this job until someone approves. The images are already built and pushed
+  # by then, so approving costs a click and no waiting -- and declining costs nothing, since
+  # an image nobody pulls is just bytes in the registry.
+  #
+  # Note what is NOT here: a version number. Production is deployed the way staging is, by
+  # the commit that passed, and `:production` moves to it. Cutting a `v*` tag is still
+  # available for a marked release, and takes this same path.
+  deploy-production:
+    name: deploy (production)
+    runs-on: ubuntu-latest
+    needs: images
+    if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
+    environment:
+      name: production
     permissions:
       contents: write
     steps:
@@ -398,19 +418,8 @@ jobs:
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tag="deployed-${GITHUB_REF_NAME}"
-            environment=production
           else
-            tag="deployed-staging-${GITHUB_SHA:0:7}"
-            environment=staging
+            tag="deployed-production-${GITHUB_SHA:0:7}"
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Forced, so re-running the pipeline on the same commit moves the ref and triggers a
-          # fresh deployment instead of failing on a tag that already exists. Redeploying the
-          # same version is something people legitimately want to do.
-          git tag -f "$tag" "$GITHUB_SHA"
-          git push -f origin "refs/tags/${tag}"
-
-          echo "==> ${tag} pushed; Dokploy deploys ${environment} from it"
+          "${GITHUB_WORKSPACE}/scripts/deploy-tag.sh" "$tag" production
