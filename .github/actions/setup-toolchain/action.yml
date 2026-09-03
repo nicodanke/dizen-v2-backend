@@ -34,6 +34,15 @@ runs:
 
     # ./bin holds ten binaries that take about three minutes to build from source. They only
     # change when tools/versions.mk or the Go version does, which is exactly the cache key.
+    # Only when the module cache missed, which is the only time anything is fetched -- and
+    # therefore the only time a proxy failure can happen. On a hit this is skipped entirely:
+    # `go mod download` still costs a minute of verification across six modules, and paying
+    # that in every job to guard against a failure that cannot occur is a bad trade.
+    - name: Warm the module cache
+      if: steps.go.outputs.cache-hit != 'true'
+      shell: bash
+      run: ./scripts/warm-modules.sh
+
     - name: Restore the pinned tools
       id: tools
       uses: actions/cache@v4
