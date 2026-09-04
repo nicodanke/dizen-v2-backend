@@ -127,7 +127,17 @@ func run(ctx context.Context, envFile string, migrateOnly bool) error {
 		return nil
 	}
 
-	return serve(ctx, cfg, log)
+	// Logged before it is returned, so the reporter sees it: main writes what run
+	// returns to stderr, and stderr is not a Sentry event. A service that dies on
+	// startup -- a dependency it cannot reach, a migration that will not apply -- is
+	// exactly the error worth being told about, and it was the one going unreported.
+	if err := serve(ctx, cfg, log); err != nil {
+		log.Error().Err(err).Msg("the service stopped with an error")
+
+		return err
+	}
+
+	return nil
 }
 
 // serve opens the dependencies, builds the transports and runs them.
