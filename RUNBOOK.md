@@ -151,6 +151,13 @@ every metric carries an `environment` label -- filter on it before reading anyth
 Metrics are kept 15 days, traces 7. Logs are not aggregated (D-46): read them per container
 in Dokploy, or on the VPS.
 
+Two dashboards come provisioned, in the Dizen folder. **Overview** answers "is everything
+all right" -- services up, error rate, p99, dead-lettered messages, queue depth, disk and
+certificate expiry. **Service detail** is where to go once you know which service: traffic
+by method, status codes, latency percentiles, the slowest methods, and requests in flight.
+Both have an environment selector at the top, so the same panel serves staging and
+production.
+
 **Alerts arrive on Telegram**, on the same bot the release workflow uses. Nine rules, in
 `deploy/observability/prometheus/alerts.yml`: a service or the broker down, error rate over
 5%, p99 over 2s, a dead-letter queue over ten messages, disk over 80% and 90%, and a

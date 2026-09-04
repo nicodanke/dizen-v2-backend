@@ -1,0 +1,3 @@
+Empty on purpose. Grafana logs an error on every start for each provisioning
+directory that does not exist, and an error in the log that means nothing is the
+kind of thing that costs twenty minutes during an incident.
