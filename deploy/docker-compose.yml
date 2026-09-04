@@ -351,11 +351,13 @@ services:
     depends_on: [prometheus]
 
   jaeger:
-    image: jaegertracing/all-in-one:1.66.0
+    # v2, matching the deployed stack. With no --config it starts the all-in-one default
+    # with memory storage, which is what a development environment wants: nothing to
+    # provision, and traces that disappear with the container rather than filling a volume.
+    # The deployed one is configured by file and stores to disk (deploy/observability).
+    image: jaegertracing/jaeger:2.20.0
     restart: unless-stopped
     networks: [dizen]
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
     ports:
       # UI: http://localhost:16686
       - "127.0.0.1:16686:16686"
