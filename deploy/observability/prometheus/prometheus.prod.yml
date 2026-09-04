@@ -20,14 +20,21 @@ scrape_configs:
     metrics_path: /metrics
 
     docker_sd_configs:
-      - host: unix:///var/run/docker.sock
+      # The proxy, not the socket. See the compose file for why.
+      - host: tcp://dizen-v2-docker-proxy:2375
         refresh_interval: 30s
 
     relabel_configs:
-      # Only the v2 application containers. The compose project name is set by Docker
-      # itself, so nothing has to be labelled by hand to be discovered.
-      - source_labels: [__meta_docker_container_label_com_docker_compose_project]
-        regex: dizen-v2-(staging|production)
+      # Only containers that ask to be scraped, by a label of ours.
+      #
+      # Not the compose project name, which was the first attempt and does not work here:
+      # Dokploy names the project itself and appends a random suffix -- the real ones are
+      # `dizen-backend-staging-hstndj` and `dizen-backend-prod-4h0j1u` -- and that suffix
+      # changes if a project is recreated. The v1 stack shares this host too, so a loose
+      # pattern would have scraped it as well. The failure was silent: a fully anchored
+      # regex matching nothing yields zero targets and no error.
+      - source_labels: [__meta_docker_container_label_dizen_metrics]
+        regex: "true"
         action: keep
 
       # A container on two networks is discovered twice. Keeping only the shared one leaves
@@ -45,10 +52,10 @@ scrape_configs:
       - source_labels: [__meta_docker_container_label_com_docker_compose_service]
         target_label: service
 
-      - source_labels: [__meta_docker_container_label_com_docker_compose_project]
-        regex: dizen-v2-(.*)
+      # Also ours, for the same reason: `dizen-backend-prod-4h0j1u` is not an environment
+      # name anyone wants to read on a dashboard.
+      - source_labels: [__meta_docker_container_label_dizen_environment]
         target_label: environment
-        replacement: $1
 
   - job_name: prometheus
     static_configs:
