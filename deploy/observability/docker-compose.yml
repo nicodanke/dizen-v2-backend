@@ -77,6 +77,19 @@ services:
   # Traces. Badger on disk rather than in memory, so a restart does not lose the trace of
   # the incident that caused it. Seven days, as RF-14 asks.
   # ---------------------------------------------------------------------------
+  # Docker creates a named volume owned by root, and Jaeger runs as uid 10001, so it cannot
+  # create its own storage directories inside it -- `mkdir /badger/key: permission denied`,
+  # in a restart loop. This prepares the volume once, so Jaeger itself stays unprivileged.
+  # Running Jaeger as root would be the shorter fix and a worse one.
+  jaeger-init:
+    image: busybox:1.37
+    command:
+      - sh
+      - -c
+      - mkdir -p /badger/data /badger/key && chown -R 10001:0 /badger
+    volumes:
+      - jaeger-data:/badger
+
   jaeger:
     <<: *logging
     image: jaegertracing/all-in-one:1.66.0
@@ -94,6 +107,10 @@ services:
 
     volumes:
       - jaeger-data:/badger
+
+    depends_on:
+      jaeger-init:
+        condition: service_completed_successfully
 
     # 4317 is OTLP gRPC, which is what the services export to, by container name over the
     # shared network. 16686 is the UI, reached through Grafana's Jaeger data source.
