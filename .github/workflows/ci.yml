@@ -39,6 +39,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
+env:
+  # Pinned like every other tool of this repository. Used by the deploy jobs to register
+  # the Sentry release (PRD-24 RF-8).
+  SENTRY_CLI_VERSION: "3.7.0"
+
 permissions:
   contents: read
 
@@ -411,6 +416,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The Sentry release below associates the commits of this deployment, which a
+          # shallow clone does not have.
+          fetch-depth: 0
 
       - name: Deploy
         env:
@@ -422,6 +431,32 @@ jobs:
         run: |
           tag="deployed-staging-${GITHUB_SHA:0:7}"
           "${GITHUB_WORKSPACE}/scripts/deploy.sh" "$tag" staging
+
+      # PRD-24 RF-8. The binary already says which release it is; this is what tells Sentry
+      # which commits went into it, so a regression can be attributed and not just seen.
+      # It needs the full history, which is why the checkout above is not shallow.
+      - name: Register the release in Sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+        run: |
+          if [ -z "${SENTRY_AUTH_TOKEN}" ]; then
+            echo "==> no SENTRY_AUTH_TOKEN; skipping"
+            exit 0
+          fi
+
+          curl -sSfL "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-x86_64" \
+            -o "${RUNNER_TEMP}/sentry-cli"
+          chmod +x "${RUNNER_TEMP}/sentry-cli"
+          export PATH="${RUNNER_TEMP}:${PATH}"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${GITHUB_REF_NAME}-${GITHUB_SHA:0:7}"
+          fi
+
+          ./scripts/sentry-release.sh "$version" "$GITHUB_SHA" "staging"
 
   # Production is the same mechanism as staging with a person in front of it, and the only
   # place a human decision sits in the whole chain.
@@ -445,6 +480,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The Sentry release below associates the commits of this deployment, which a
+          # shallow clone does not have.
+          fetch-depth: 0
 
       - name: Deploy
         env:
@@ -459,3 +498,29 @@ jobs:
           fi
 
           "${GITHUB_WORKSPACE}/scripts/deploy.sh" "$tag" production
+
+      # PRD-24 RF-8. The binary already says which release it is; this is what tells Sentry
+      # which commits went into it, so a regression can be attributed and not just seen.
+      # It needs the full history, which is why the checkout above is not shallow.
+      - name: Register the release in Sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+        run: |
+          if [ -z "${SENTRY_AUTH_TOKEN}" ]; then
+            echo "==> no SENTRY_AUTH_TOKEN; skipping"
+            exit 0
+          fi
+
+          curl -sSfL "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-x86_64" \
+            -o "${RUNNER_TEMP}/sentry-cli"
+          chmod +x "${RUNNER_TEMP}/sentry-cli"
+          export PATH="${RUNNER_TEMP}:${PATH}"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${GITHUB_REF_NAME}-${GITHUB_SHA:0:7}"
+          fi
+
+          ./scripts/sentry-release.sh "$version" "$GITHUB_SHA" "production"

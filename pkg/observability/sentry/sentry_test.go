@@ -154,6 +154,21 @@ func TestANilSinkIsSafe(t *testing.T) {
 	}
 }
 
+// The release string is a contract between two places that never see each other: this
+// package, which reports it from the running binary, and scripts/sentry-release.sh, which
+// registers it from CI. When they disagree Sentry shows a release with no events beside
+// events with no release, which reads as a reporting failure and is not one.
+func TestTheReleaseMatchesWhatCIRegisters(t *testing.T) {
+	t.Parallel()
+
+	// scripts/sentry-release.sh builds "${service}@${version}@${commit}".
+	const asRegisteredByCI = "identity@staging-abc1234@abcdef1234567890"
+
+	if got := Release("identity", "staging-abc1234", "abcdef1234567890"); got != asRegisteredByCI {
+		t.Errorf("the binary reports %q, CI registers %q", got, asRegisteredByCI)
+	}
+}
+
 func TestTheReleaseCarriesTheCommit(t *testing.T) {
 	t.Parallel()
 
