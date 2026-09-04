@@ -158,10 +158,13 @@ by method, status codes, latency percentiles, the slowest methods, and requests 
 Both have an environment selector at the top, so the same panel serves staging and
 production.
 
-**Alerts arrive on Telegram**, on the same bot the release workflow uses. Nine rules, in
-`deploy/observability/prometheus/alerts.yml`: a service or the broker down, error rate over
-5%, p99 over 2s, a dead-letter queue over ten messages, disk over 80% and 90%, and a
-certificate inside 14 days of expiry. Staging alerts repeat once a day rather than every
+**Alerts arrive on Telegram**, on the same bot the release workflow uses. Ten rules, in
+`deploy/observability/prometheus/alerts.yml`: a service not answering, a service that has
+disappeared, the broker down, error rate over 5%, p99 over 2s, a dead-letter queue over ten
+messages, disk over 80% and 90%, and a certificate inside 14 days of expiry.
+
+A stopped container is the second of those, not the first: targets come from Docker, so it
+leaves discovery rather than reporting itself down. Staging alerts repeat once a day rather than every
 four hours -- they are worth knowing about, not worth being woken by.
 
 Direct, without Grafana:

@@ -17,16 +17,40 @@ groups:
       # either, and one that is up but not ready is restarted by its own healthcheck before
       # two minutes are out. Splitting them would mean scraping a second endpoint to learn
       # what this already says.
-      - alert: ServiceDown
+      # Present, but not answering. The container is running and Prometheus reaches it,
+      # and it does not reply -- starting up, applying migrations, or wedged.
+      - alert: ServiceNotAnswering
         expr: up{job="dizen-services"} == 0
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: '{{ $labels.service }} is down in {{ $labels.environment }}'
+          summary: '{{ $labels.service }} is not answering in {{ $labels.environment }}'
           description: >-
-            It has not answered a scrape for two minutes. Its container may be restarting,
-            or failing its migrations at startup, which stops it becoming ready.
+            Its container is running but it has not answered a scrape for two minutes. A
+            migration failing at startup keeps it from ever becoming ready.
+
+      # Gone entirely, which the rule above cannot see.
+      #
+      # Targets come from Docker, so a stopped or deleted container does not report up=0 --
+      # it disappears from discovery, and a series that no longer exists never equals zero.
+      # Verified by stopping one: the series vanished within a refresh.
+      #
+      # `max_over_time` keeps a series alive for an hour after its last sample, so `unless`
+      # leaves exactly the ones that were here and are not, with their labels intact. It
+      # needs no list of expected services, so adding a sixth one needs no change here. A
+      # service removed on purpose alerts for an hour and then stops, which is the right
+      # trade for not having to maintain that list.
+      - alert: ServiceMissing
+        expr: max_over_time(up{job="dizen-services"}[1h]) unless up{job="dizen-services"}
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{{ $labels.service }} has disappeared from {{ $labels.environment }}'
+          description: >-
+            Its container is no longer running. If it was removed on purpose, this stops on
+            its own within the hour.
 
       - alert: BrokerDown
         expr: up{job="rabbitmq"} == 0
