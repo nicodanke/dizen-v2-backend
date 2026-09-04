@@ -32,6 +32,46 @@ x-logging: &logging
 
 services:
   # ---------------------------------------------------------------------------
+  # Prometheus discovers its targets from Docker, and this is what it asks.
+  #
+  # Not the socket itself. Read access to /var/run/docker.sock is effectively root on the
+  # host -- it can start a privileged container -- and Prometheus needs one thing from it:
+  # the list of containers. This proxy exposes exactly that and refuses everything else, so
+  # a compromised Prometheus gets a container listing rather than the machine.
+  #
+  # It is also what makes it work at all: the prom/prometheus image runs as nobody, the
+  # socket is root-owned with mode 660, and mounting it directly fails with a permission
+  # error that Prometheus logs once and then reports as zero targets.
+  # ---------------------------------------------------------------------------
+  docker-proxy:
+    <<: *logging
+    image: ghcr.io/tecnativa/docker-socket-proxy:v0.5.0
+    container_name: dizen-v2-docker-proxy
+    restart: unless-stopped
+    networks: [dokploy-network]
+
+    environment:
+      # Both are read-only listings, and both are needed: Prometheus lists the containers,
+      # then reads the networks to work out which address to scrape each one on. Without
+      # NETWORKS it gets a 403 there and discovers nothing -- the containers call having
+      # succeeded, which makes it look like a filtering problem rather than a permission.
+      #
+      # Everything else stays at its default of 0, which is deny.
+      CONTAINERS: "1"
+      NETWORKS: "1"
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    expose: ["2375"]
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+
+  # ---------------------------------------------------------------------------
   # Metrics. Retention is 15 days, as RF-14 asks: the risk table of PRD-18 lists a full disk
   # from metrics, and this is what bounds it.
   # ---------------------------------------------------------------------------
@@ -51,8 +91,9 @@ services:
     volumes:
       - ./prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
-      # Read-only, and only to discover targets. Prometheus never writes through it.
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    depends_on:
+      - docker-proxy
 
     # Not published and not routed. Prometheus has no authentication of its own, so the only
     # way in is Grafana, which does. Reach it directly through an SSH tunnel if you must.
@@ -77,26 +118,43 @@ services:
   # Traces. Badger on disk rather than in memory, so a restart does not lose the trace of
   # the incident that caused it. Seven days, as RF-14 asks.
   # ---------------------------------------------------------------------------
+  # Docker creates a named volume owned by root, and Jaeger runs as uid 10001, so it cannot
+  # create its own storage directories inside it -- `mkdir /badger/key: permission denied`,
+  # in a restart loop. This prepares the volume once, so Jaeger itself stays unprivileged.
+  # Running Jaeger as root would be the shorter fix and a worse one.
+  jaeger-init:
+    image: busybox:1.37
+    command:
+      - sh
+      - -c
+      - mkdir -p /badger/data /badger/key && chown -R 10001:0 /badger
+    volumes:
+      - jaeger-data:/badger
+
   jaeger:
     <<: *logging
-    image: jaegertracing/all-in-one:1.66.0
+    # v2, not the v1 all-in-one the development compose still uses. v1 reached end of life
+    # on 2025-12-31: it receives no fixes and, more to the point here, no security patches.
+    image: jaegertracing/jaeger:2.20.0
     container_name: dizen-v2-jaeger
     restart: unless-stopped
     networks: [dokploy-network]
 
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
-      SPAN_STORAGE_TYPE: badger
-      BADGER_EPHEMERAL: "false"
-      BADGER_DIRECTORY_VALUE: /badger/data
-      BADGER_DIRECTORY_KEY: /badger/key
-      BADGER_SPAN_STORE_TTL: 168h
+    # v2 is an OpenTelemetry Collector distribution, so it is configured by a file instead
+    # of the environment variables v1 took. Retention lives in there too.
+    command: ["--config", "file:/etc/jaeger/config.yaml"]
 
     volumes:
+      - ./jaeger/config.yaml:/etc/jaeger/config.yaml:ro
       - jaeger-data:/badger
 
+    depends_on:
+      jaeger-init:
+        condition: service_completed_successfully
+
     # 4317 is OTLP gRPC, which is what the services export to, by container name over the
-    # shared network. 16686 is the UI, reached through Grafana's Jaeger data source.
+    # shared network. 16686 is the query API, reached through Grafana's Jaeger data source.
+    # Neither is published: nothing here is routed through Traefik.
     expose: ["4317", "16686"]
 
     deploy:
@@ -106,6 +164,13 @@ services:
           memory: 512M
         reservations:
           memory: 128M
+
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # ---------------------------------------------------------------------------
   # The only thing published, and the only one with a login.

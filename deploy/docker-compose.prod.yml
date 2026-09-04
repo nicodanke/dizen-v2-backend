@@ -146,6 +146,12 @@ services:
       # private key (01 section 6).
       JWT_PRIVATE_KEY_PEM: ${JWT_PRIVATE_KEY_PEM}
     labels:
+      # What Prometheus discovers on. Its own label, not the compose project name: Dokploy
+      # names the project itself, with a random suffix that changes when it is recreated,
+      # and the v1 stack shares this host. See deploy/observability/prometheus.
+      - dizen.metrics=true
+      - dizen.environment=${DIZEN_ENV}
+
       - traefik.enable=true
       # The container is on two networks; without this Traefik may pick the internal one and
       # route to an address it cannot reach.
@@ -199,6 +205,10 @@ services:
       DATABASE_URL: ${TOURS_DATABASE_URL}
       REDIS_NAMESPACE: tours
     labels:
+      # See identity for why this is our own label and not the compose project name.
+      - dizen.metrics=true
+      - dizen.environment=${DIZEN_ENV}
+
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
 
@@ -227,6 +237,10 @@ services:
       DATABASE_URL: ${BOOKING_DATABASE_URL}
       REDIS_NAMESPACE: booking
     labels:
+      # See identity for why this is our own label and not the compose project name.
+      - dizen.metrics=true
+      - dizen.environment=${DIZEN_ENV}
+
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
 
@@ -260,6 +274,10 @@ services:
       TOURS_GRPC_ADDR: tours:9090
       BOOKING_GRPC_ADDR: booking:9090
     labels:
+      # See identity for why this is our own label and not the compose project name.
+      - dizen.metrics=true
+      - dizen.environment=${DIZEN_ENV}
+
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
 
@@ -278,6 +296,13 @@ services:
     image: ${IMAGE_REGISTRY}/mail-dispatcher:${IMAGE_TAG}
     # No Traefik labels: this service consumes events and has no public API (01 section 2).
     # It is still on dokploy-network, because that is where its database and the broker are.
+    #
+    # It is scraped like the rest, though. Having no public API is not having no metrics,
+    # and a consumer falling behind its queue is exactly what you want to be told about.
+    labels:
+      - dizen.metrics=true
+      - dizen.environment=${DIZEN_ENV}
+
     environment:
       <<: *service-env
       SERVICE_NAME: mail-dispatcher
