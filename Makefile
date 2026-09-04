@@ -258,12 +258,14 @@ jwt-key-pem: ## Generate an Ed25519 key pair as real multi-line PEM, for a file
 
 .PHONY: hooks
 hooks: ## Install the git hooks (pre-push; PRD-25 RF-3)
-	@$(TOOLS_BIN)/lefthook install
+	@git config core.hooksPath .githooks
+	@rm -f .git/hooks/pre-push
 	@echo "==> pre-push hook installed. Bypass a single push with --no-verify"
 
 .PHONY: unhooks
 unhooks: ## Remove the git hooks
-	@$(TOOLS_BIN)/lefthook uninstall
+	@git config --unset core.hooksPath || true
+	@echo "==> pre-push hook removed"
 
 .PHONY: sqlc
 sqlc: ## Regenerate the typed queries for every service

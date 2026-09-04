@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+# Runs the pre-push checks (PRD-25 RF-3). Installed with `make hooks`, which points
+# core.hooksPath here, so this file is versioned and everyone gets the same hook.
+#
+# lefthook's own generated shim is deliberately not used. It looks for `lefthook` on PATH
+# and, when it cannot find it, prints a line and exits 0 -- a hook that appears installed
+# and verifies nothing. The tools of this repository live in ./bin and are not on PATH, so
+# that is exactly what happened. Failing loudly is the whole point of a blocking hook.
+#
+# --force because every check here is repository-wide -- commit messages, vet, lint, the
+# unit tests -- and none of them depends on which files the push happens to carry. Without
+# it lefthook decides they have nothing to do and skips them.
+#
+# Bypass a single push with `git push --no-verify`. CI runs all of it again (RF-5).
+set -eu
+
+ROOT="$(git rev-parse --show-toplevel)"
+LEFTHOOK="${ROOT}/bin/lefthook"
+
+if [ ! -x "$LEFTHOOK" ]; then
+  echo "pre-push: ${LEFTHOOK} is missing. Run 'make tools', or 'git push --no-verify' to skip." >&2
+  exit 1
+fi
+
+exec "$LEFTHOOK" run pre-push --force "$@"
