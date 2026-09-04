@@ -52,6 +52,7 @@ tools: ## Install the tools pinned in tools/versions.mk into ./bin
 	@GOWORK=off GOBIN=$(TOOLS_BIN) go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
 	@GOWORK=off GOBIN=$(TOOLS_BIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	@GOWORK=off GOBIN=$(TOOLS_BIN) go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
+	@GOWORK=off GOBIN=$(TOOLS_BIN) go install github.com/evilmartians/lefthook@$(LEFTHOOK_VERSION)
 	@# Dart is optional: it is only needed to regenerate the Dart package, and the generated
 	@# code is committed. Missing it must not block a first run, so this warns instead of
 	@# failing. `make tools-dart` on its own is strict, because asking for it explicitly
@@ -254,6 +255,15 @@ jwt-key: ## Generate an Ed25519 key pair on one line, for Doppler and .env
 .PHONY: jwt-key-pem
 jwt-key-pem: ## Generate an Ed25519 key pair as real multi-line PEM, for a file
 	@$(ROOT_DIR)/scripts/jwt-key.sh -pem
+
+.PHONY: hooks
+hooks: ## Install the git hooks (pre-push; PRD-25 RF-3)
+	@$(TOOLS_BIN)/lefthook install
+	@echo "==> pre-push hook installed. Bypass a single push with --no-verify"
+
+.PHONY: unhooks
+unhooks: ## Remove the git hooks
+	@$(TOOLS_BIN)/lefthook uninstall
 
 .PHONY: sqlc
 sqlc: ## Regenerate the typed queries for every service
