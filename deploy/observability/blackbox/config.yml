@@ -1,0 +1,15 @@
+# Blackbox probes (PRD-18 RF-15).
+#
+# One module, and it only completes a TLS handshake. That is enough for what RF-15 asks --
+# how long until the certificate expires -- and it works against every host we publish.
+#
+# An http_2xx probe would not: the gRPC hosts answer 415 to a plain HTTP request, which is
+# correct behaviour and would show up as a failing probe forever.
+modules:
+  tls_connect:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      tls: true
+      tls_config:
+        insecure_skip_verify: false

@@ -15,6 +15,14 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [dizen-v2-alertmanager:9093]
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   - job_name: dizen-services
     metrics_path: /metrics
@@ -63,6 +71,55 @@ scrape_configs:
       # name anyone wants to read on a dashboard.
       - source_labels: [__meta_docker_container_label_dizen_environment]
         target_label: environment
+
+  # The broker, for the dead-letter depth RF-15 alerts on. Static targets rather than
+  # discovery: these two container names are fixed by their compose files, unlike the
+  # application ones.
+  #
+  # /metrics/per-object rather than /metrics: the default endpoint aggregates across queues,
+  # and "the dead letter queue is filling" is a question about one queue.
+  - job_name: rabbitmq
+    metrics_path: /metrics/per-object
+    static_configs:
+      - targets: [dizen-v2-rabbitmq-staging:15692]
+        labels:
+          environment: staging
+      - targets: [dizen-v2-rabbitmq-production:15692]
+        labels:
+          environment: production
+
+  - job_name: node
+    static_configs:
+      - targets: [dizen-v2-node-exporter:9100]
+
+  # Certificate expiry. The probe runs from the blackbox exporter, so the target travels as
+  # a parameter and the address is rewritten to the prober -- the standard shape, and the
+  # one that reads as backwards the first time.
+  - job_name: certificates
+    metrics_path: /probe
+    params:
+      module: [tls_connect]
+    static_configs:
+      - targets:
+          - api.v2.dizen.pro:443
+          - admin-api.v2.dizen.pro:443
+          - grpc-identity.v2.dizen.pro:443
+          - grpc-tours.v2.dizen.pro:443
+          - grpc-booking.v2.dizen.pro:443
+        labels:
+          environment: production
+      - targets:
+          - api.staging.v2.dizen.pro:443
+          - grpc-identity.staging.v2.dizen.pro:443
+        labels:
+          environment: staging
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: dizen-v2-blackbox:9115
 
   - job_name: prometheus
     static_configs:

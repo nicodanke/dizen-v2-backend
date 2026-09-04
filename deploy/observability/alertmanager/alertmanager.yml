@@ -1,0 +1,41 @@
+# Alert routing (PRD-18 RF-15). This is a template: __CHAT_ID__ is substituted at startup
+# and the bot token is read from a file, so neither reaches the repository.
+
+route:
+  receiver: telegram
+  # Group by what a person acts on. Two services failing at once is one incident, and the
+  # environment matters because the same alert means different things in staging.
+  group_by: [alertname, environment]
+  # Wait a little before the first message so a burst arrives as one, then stay quiet unless
+  # something changes. Four hours between repeats of an alert nobody has resolved: often
+  # enough not to forget, rare enough not to be tuned out.
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # Staging is not worth waking up for. It still notifies, just without the urgency.
+    - matchers: [environment = "staging"]
+      receiver: telegram
+      repeat_interval: 24h
+
+receivers:
+  - name: telegram
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/secrets/telegram-token
+        chat_id: __CHAT_ID__
+        parse_mode: HTML
+        send_resolved: true
+        message: |
+          {{ if eq .Status "firing" }}🔴{{ else }}✅{{ end }} <b>{{ .CommonLabels.alertname }}</b>{{ with .CommonLabels.environment }} · {{ . }}{{ end }}
+
+          {{ range .Alerts }}{{ .Annotations.summary }}
+          {{ with .Annotations.description }}{{ . }}
+          {{ end }}{{ end }}
+
+inhibit_rules:
+  # A service that is down will also look slow and error-prone on its way out. Only the
+  # cause is worth a message.
+  - source_matchers: [severity = "critical"]
+    target_matchers: [severity = "warning"]
+    equal: [environment, service]

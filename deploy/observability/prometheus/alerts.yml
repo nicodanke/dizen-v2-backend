@@ -1,0 +1,140 @@
+# Alert rules (PRD-18 RF-15).
+#
+# Each rule names the environment it fired in, because one stack watches both (D-46) and
+# "identity is down" means something different in each.
+#
+# `for:` is not decoration. Every one of these can be briefly true during a deployment --
+# a container restarting, a queue draining, a scrape missed -- and an alert that fires on
+# every deploy is one people mute.
+
+groups:
+  - name: availability
+    interval: 30s
+    rules:
+      # RF-15: service down, and /readyz failing for more than two minutes.
+      #
+      # Both are this rule. A service that cannot answer /metrics cannot answer /readyz
+      # either, and one that is up but not ready is restarted by its own healthcheck before
+      # two minutes are out. Splitting them would mean scraping a second endpoint to learn
+      # what this already says.
+      - alert: ServiceDown
+        expr: up{job="dizen-services"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{{ $labels.service }} is down in {{ $labels.environment }}'
+          description: >-
+            It has not answered a scrape for two minutes. Its container may be restarting,
+            or failing its migrations at startup, which stops it becoming ready.
+
+      - alert: BrokerDown
+        expr: up{job="rabbitmq"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'RabbitMQ is unreachable in {{ $labels.environment }}'
+          description: 'Events are not being delivered, and publishers will be blocking on confirms.'
+
+  - name: latency-and-errors
+    interval: 30s
+    rules:
+      # RF-15 asks for "5xx rate above 5%". There is no HTTP metric to ask that of: REST
+      # arrives through grpc-gateway and lands in the same handlers, so the status that
+      # exists is the gRPC one. These codes are the ones a 5xx would have been.
+      - alert: HighErrorRate
+        expr: >-
+          sum by (environment, service) (
+            rate(dizen_grpc_requests_total{code=~"Internal|Unknown|Unavailable|DataLoss"}[5m])
+          )
+          /
+          sum by (environment, service) (rate(dizen_grpc_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.service }} is failing {{ $value | humanizePercentage }} of requests in {{ $labels.environment }}'
+
+      - alert: HighLatency
+        expr: >-
+          histogram_quantile(
+            0.99,
+            sum by (environment, service, le) (rate(dizen_grpc_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.service }} p99 is {{ $value | humanizeDuration }} in {{ $labels.environment }}'
+          description: 'RF-15 sets the threshold at two seconds.'
+
+  - name: queues
+    interval: 30s
+    rules:
+      # RF-15: more than ten messages dead-lettered. A dead letter is a message that failed
+      # every retry, so any depth here is a bug that already happened; ten is where it stops
+      # being one bad message and starts being a pattern.
+      - alert: DeadLetterQueueFilling
+        expr: rabbitmq_queue_messages{queue=~".+\\.dlq"} > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.queue }} holds {{ $value }} messages in {{ $labels.environment }}'
+          description: 'These failed every retry. Read one before purging: they say what broke.'
+
+  - name: host
+    interval: 1m
+    rules:
+      # RF-15: disk above 80%. The VPS carries the v1 stack as well as both v2 environments,
+      # so this is the alert most likely to matter.
+      - alert: DiskFilling
+        expr: >-
+          100 - (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"} * 100
+          ) > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.mountpoint }} is {{ $value | humanize }}% full'
+          description: 'Metrics, traces and container logs all have bounded retention; something else is growing.'
+
+      - alert: DiskCritical
+        expr: >-
+          100 - (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"} * 100
+          ) > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{{ $labels.mountpoint }} is {{ $value | humanize }}% full'
+
+  - name: certificates
+    interval: 5m
+    rules:
+      # RF-15: certificate about to expire. Let's Encrypt issues for 90 days and Traefik
+      # renews at 30 remaining, so 14 means renewal has been failing for two weeks -- long
+      # enough to be real, early enough to fix by hand.
+      - alert: CertificateExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.instance }} expires in {{ $value | humanize }} days'
+          description: 'Traefik renews at 30 days remaining, so this means renewal is failing.'
+
+      - alert: CertificateProbeFailing
+        expr: probe_success{job="certificates"} == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Cannot complete a TLS handshake with {{ $labels.instance }}'
+          description: 'Either the host is unreachable or its certificate is not being served.'

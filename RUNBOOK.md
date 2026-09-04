@@ -151,6 +151,12 @@ every metric carries an `environment` label -- filter on it before reading anyth
 Metrics are kept 15 days, traces 7. Logs are not aggregated (D-46): read them per container
 in Dokploy, or on the VPS.
 
+**Alerts arrive on Telegram**, on the same bot the release workflow uses. Nine rules, in
+`deploy/observability/prometheus/alerts.yml`: a service or the broker down, error rate over
+5%, p99 over 2s, a dead-letter queue over ten messages, disk over 80% and 90%, and a
+certificate inside 14 days of expiry. Staging alerts repeat once a day rather than every
+four hours -- they are worth knowing about, not worth being woken by.
+
 Direct, without Grafana:
 
 ```bash
