@@ -43,6 +43,13 @@ type Base struct {
 
 	// TraceSampleRatio is the fraction of traces sampled, between 0 and 1.
 	TraceSampleRatio float64 `env:"TRACE_SAMPLE_RATIO" envDefault:"1.0" validate:"gte=0,lte=1"`
+
+	// SentryDSN is the Sentry project this service reports errors to (PRD-24 RF-2).
+	//
+	// One project per service, so this differs per service within the same environment,
+	// unlike most of what is here. Empty disables reporting, which is what lets a
+	// developer machine and a fresh environment run without a Sentry project at all.
+	SentryDSN string `env:"SENTRY_DSN" envDefault:""`
 }
 
 // GRPCAddress is the listen address of the gRPC server.

@@ -44,6 +44,16 @@ type Options struct {
 
 	// Output is where lines are written. Defaults to os.Stdout.
 	Output io.Writer
+
+	// Extra are additional destinations for every line, on top of Output.
+	//
+	// This is how the Sentry reporter is attached (PRD-24 RF-2): it is an io.Writer that
+	// parses the JSON line, so it sees the fields -- trace_id among them -- which a
+	// zerolog hook cannot, because a hook is handed only the level and the message.
+	//
+	// Nil entries are skipped, so a caller can pass a disabled reporter's writer without
+	// checking it first.
+	Extra []io.Writer
 }
 
 // New builds the root logger.
@@ -63,6 +73,12 @@ func New(opts Options) zerolog.Logger {
 		}
 	}
 
+	// Each writer receives the same rendered line, so the console formatting above applies
+	// to stdout and the extras still get the JSON they parse.
+	if writers := append([]io.Writer{out}, nonNil(opts.Extra)...); len(writers) > 1 {
+		out = zerolog.MultiLevelWriter(writers...)
+	}
+
 	ctx := zerolog.New(out).
 		Level(ParseLevel(opts.Level)).
 		With().
@@ -74,6 +90,20 @@ func New(opts Options) zerolog.Logger {
 	}
 
 	return ctx.Logger()
+}
+
+// nonNil drops the nil writers, so a caller can pass an optional destination straight
+// through rather than building the slice conditionally.
+func nonNil(writers []io.Writer) []io.Writer {
+	kept := make([]io.Writer, 0, len(writers))
+
+	for _, w := range writers {
+		if w != nil {
+			kept = append(kept, w)
+		}
+	}
+
+	return kept
 }
 
 // ParseLevel maps a level name to a zerolog level, falling back to info.
