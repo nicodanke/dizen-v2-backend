@@ -1,0 +1,162 @@
+# The observability stack (PRD-18 RF-14), as its own Dokploy project.
+#
+# One stack for both environments, not one each. RF-14 says "in the production compose", and
+# this deviates on purpose: the VPS also runs the v1 stack, and a second Prometheus, Grafana
+# and Jaeger would cost real memory to answer the same questions about a different label.
+# Staging and production stay apart where it matters -- their data, their secrets, their
+# containers -- and share only the thing looking at them (D-46).
+#
+# Loki is deliberately absent (D-46). Dokploy already shows each container's logs, and the
+# pair of Loki and Promtail is the heaviest part of RF-14 for the least return at this size.
+#
+# Deployed as its own project so it survives a redeploy of either environment, and so its
+# retention is not tied to an application release.
+
+name: dizen-v2-observability
+
+networks:
+  dokploy-network:
+    external: true
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  jaeger-data:
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Metrics. Retention is 15 days, as RF-14 asks: the risk table of PRD-18 lists a full disk
+  # from metrics, and this is what bounds it.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    <<: *logging
+    image: prom/prometheus:v3.7.3
+    container_name: dizen-v2-prometheus
+    restart: unless-stopped
+    networks: [dokploy-network]
+
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=4GB
+      - --web.enable-lifecycle
+
+    volumes:
+      - ./prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+      # Read-only, and only to discover targets. Prometheus never writes through it.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    # Not published and not routed. Prometheus has no authentication of its own, so the only
+    # way in is Grafana, which does. Reach it directly through an SSH tunnel if you must.
+    expose: ["9090"]
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 640M
+        reservations:
+          memory: 192M
+
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Traces. Badger on disk rather than in memory, so a restart does not lose the trace of
+  # the incident that caused it. Seven days, as RF-14 asks.
+  # ---------------------------------------------------------------------------
+  jaeger:
+    <<: *logging
+    image: jaegertracing/all-in-one:1.66.0
+    container_name: dizen-v2-jaeger
+    restart: unless-stopped
+    networks: [dokploy-network]
+
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      SPAN_STORAGE_TYPE: badger
+      BADGER_EPHEMERAL: "false"
+      BADGER_DIRECTORY_VALUE: /badger/data
+      BADGER_DIRECTORY_KEY: /badger/key
+      BADGER_SPAN_STORE_TTL: 168h
+
+    volumes:
+      - jaeger-data:/badger
+
+    # 4317 is OTLP gRPC, which is what the services export to, by container name over the
+    # shared network. 16686 is the UI, reached through Grafana's Jaeger data source.
+    expose: ["4317", "16686"]
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  # The only thing published, and the only one with a login.
+  # ---------------------------------------------------------------------------
+  grafana:
+    <<: *logging
+    image: grafana/grafana:12.3.0
+    container_name: dizen-v2-grafana
+    restart: unless-stopped
+    networks: [dokploy-network]
+
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-dizen}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required. This is the only door into the metrics of both environments; generate it with openssl rand -hex 32}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: https://${GRAFANA_HOST:?GRAFANA_HOST is required, for example grafana.v2.dizen.pro}
+      # Anonymous access off is the default; stated because RF-14 asks for restricted
+      # access and a default is not a decision.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      # Mounted over the file above: the dashboards are shared with the local environment
+      # and versioned once, only the addresses differ. See the file for why.
+      - ./grafana/datasources.deployed.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - grafana-data:/var/lib/grafana
+
+    depends_on:
+      - prometheus
+      - jaeger
+
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.dizen-grafana.rule=Host(`${GRAFANA_HOST}`)
+      - traefik.http.routers.dizen-grafana.entrypoints=websecure
+      - traefik.http.routers.dizen-grafana.tls=true
+      - traefik.http.routers.dizen-grafana.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
+      - traefik.http.services.dizen-grafana.loadbalancer.server.port=3000
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 384M
+        reservations:
+          memory: 128M
+
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

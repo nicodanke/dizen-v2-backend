@@ -144,8 +144,14 @@ secret. Nothing else uses it.
 
 ## Reading an incident
 
-Prometheus, Grafana, Jaeger and Loki are in the development compose and **not** in
-production (RF-14 is open). Until they are, what is available:
+Grafana is at `https://grafana.v2.dizen.pro`, and it is the way in: Prometheus and Jaeger
+are not published and have no login of their own. One stack covers both environments, so
+every metric carries an `environment` label -- filter on it before reading anything.
+
+Metrics are kept 15 days, traces 7. Logs are not aggregated (D-46): read them per container
+in Dokploy, or on the VPS.
+
+Direct, without Grafana:
 
 ```bash
 curl -s https://api.v2.dizen.pro/v1/identity/health   # version, commit, clock
