@@ -26,10 +26,16 @@ fi
 SERVICES="identity tours booking admin mail-dispatcher"
 
 for service in $SERVICES; do
-  # The project slug defaults to the service name and can be overridden per service, since
-  # Sentry slugs are chosen when the project is created and need not match.
+  # The slugs follow one convention, so they are derived rather than listed:
+  #
+  #   backend-v2-identity  backend-v2-tours  backend-v2-booking
+  #   backend-v2-admin     backend-v2-mail-dispatcher
+  #
+  # SENTRY_PROJECT_<SERVICE> overrides one of them, for the day a project is created with a
+  # name that does not fit -- which is the only reason the override exists, since a Sentry
+  # slug is fixed when the project is created and cannot be assumed.
   var="SENTRY_PROJECT_$(echo "$service" | tr '[:lower:]-' '[:upper:]_')"
-  project="${!var:-$service}"
+  project="${!var:-backend-v2-$service}"
 
   # Exactly what the binary reports. If the two ever disagree, Sentry shows a release with
   # no events beside events with no release, which looks like a reporting failure and is
