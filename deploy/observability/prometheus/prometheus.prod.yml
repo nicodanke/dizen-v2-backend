@@ -23,6 +23,13 @@ scrape_configs:
       # The proxy, not the socket. See the compose file for why.
       - host: tcp://dizen-v2-docker-proxy:2375
         refresh_interval: 30s
+        # One target per network, instead of only the container's first one.
+        #
+        # The services are on two networks, `internal` first and `dokploy-network` second.
+        # With the default of true, Prometheus considers only `internal`, whose address it
+        # cannot reach, and the filter below then drops it -- leaving no targets at all and
+        # no error to explain why.
+        match_first_network: false
 
     relabel_configs:
       # Only containers that ask to be scraped, by a label of ours.
