@@ -15,6 +15,10 @@ MOCKERY_VERSION                := v3.7.4
 MIGRATE_VERSION                := v4.19.1
 GOLANGCI_LINT_VERSION          := v2.13.2
 
+# Git hooks (PRD-25). Not `latest`: from v1.13 lefthook pulls a version of
+# go-json-experiment that does not build against the Go toolchain pinned in go.work.
+LEFTHOOK_VERSION               := v1.12.3
+
 # gitleaks still declares the module path of its former owner, so the install path is
 # zricethezav/gitleaks and not gitleaks/gitleaks. It backs `make secrets-scan` and the
 # secrets job of CI (PRD-18 RF-11, RNF-4).

@@ -1,0 +1,41 @@
+# Git hooks (PRD-25 RF-1, RF-3).
+#
+# pre-push only. There is no pre-commit here on purpose: formatting on every commit buys
+# little when `make fmt` is one command and CI checks it anyway, and a hook that fires
+# constantly is the one people learn to skip.
+#
+# The budget is 60 seconds (RF-3). Serially these add up to about 105, so they run in
+# parallel -- they share the Go build cache, so the cost is contention rather than repeated
+# work. RF-6 is the reason to care: a slow hook gets bypassed, and then it protects nothing.
+#
+# This is a convenience, not the last line of defence (RF-5). `--no-verify` still works and
+# CI runs all of it again, plus the parts too slow to belong here: the integration tests,
+# the coverage gate, the generated-code checks and the secret scan.
+#
+#   make hooks     install
+#   make unhooks   remove
+
+pre-push:
+  parallel: true
+
+  commands:
+    # First because it is the cheapest and the one that has actually caught something: a
+    # header over 72 characters fails the pull request, and fixing it after the fact means
+    # rewriting a branch other people may already have.
+    commits:
+      run: ./scripts/pre-push-commits.sh
+
+    format:
+      run: make fmt-check
+
+    vet:
+      run: make vet
+
+    lint:
+      run: make lint
+
+    contract:
+      run: make proto-lint
+
+    tests:
+      run: make test

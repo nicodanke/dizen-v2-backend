@@ -22,6 +22,7 @@ STACKS=(
   "deploy/docker-compose.prod.yml:deploy/dokploy.env.example"
   "deploy/rabbitmq/docker-compose.yml:deploy/rabbitmq/rabbitmq.env.example"
   "deploy/redis/docker-compose.yml:deploy/redis/redis.env.example"
+  "deploy/observability/docker-compose.yml:deploy/observability/observability.env.example"
 )
 
 if ! docker compose version >/dev/null 2>&1; then

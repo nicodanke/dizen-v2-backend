@@ -1,0 +1,20 @@
+# Data sources for the deployed stack, mounted over the local ones.
+#
+# They differ in one thing: the address. Locally each service is reachable by its compose
+# service name; on the VPS the shared `dokploy-network` carries the v1 stack too, so a name
+# as generic as `prometheus` is not necessarily ours. The container names are.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://dizen-v2-prometheus:9090
+    isDefault: true
+    editable: false
+
+  - name: Jaeger
+    type: jaeger
+    access: proxy
+    url: http://dizen-v2-jaeger:16686
+    editable: false
