@@ -275,9 +275,16 @@ keep, and the deployment leaves a trace in the history saying which commit went 
 Note the second tag on a release: `v1.2.3` is pushed by a person and exists before the images
 do, so it cannot be the trigger. `deployed-v1.2.3` is pushed by the workflow once they exist.
 
-**Dokploy's own branch auto-deploy must be off**, on all three projects. On the application
-it is the trigger that races the build; on Redis and RabbitMQ it would recreate the broker
-and the cache on every unrelated commit.
+**Every Dokploy trigger stays off**, on all of the projects, and for two different reasons.
+
+On the two application projects it is the race: any git trigger fires before the images of
+that commit exist. Those are deployed by the pipeline calling Dokploy's API once they do.
+
+On Redis, RabbitMQ and observability it is the noise. Their composes use pinned upstream
+images and build nothing, so there is nothing to race -- but a trigger on `main` would
+recreate the broker, the cache and the monitoring on every unrelated commit, and the last of
+those would blind you during the deployment you were watching. They are deployed by hand,
+when their own configuration changes.
 
 ### The other two workflows
 
