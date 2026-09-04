@@ -1,0 +1,55 @@
+# Scrape configuration for the deployed environments (PRD-18 RF-14).
+#
+# One Prometheus serves both staging and production. They are told apart by a label, not by
+# running two copies: the VPS also carries the v1 stack, and a second Prometheus would cost
+# real memory to answer the same questions.
+#
+# Targets are discovered from Docker rather than listed. A static list would have to name
+# containers like `dizen-v2-production-identity-1`, which encodes a replica index nobody
+# should have to keep in sync, and would silently stop covering a service somebody adds.
+#
+# Prometheus measures the system; Sentry captures errors and Statsig measures user behaviour
+# (01 section 7). Nothing here duplicates those.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: dizen-services
+    metrics_path: /metrics
+
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 30s
+
+    relabel_configs:
+      # Only the v2 application containers. The compose project name is set by Docker
+      # itself, so nothing has to be labelled by hand to be discovered.
+      - source_labels: [__meta_docker_container_label_com_docker_compose_project]
+        regex: dizen-v2-(staging|production)
+        action: keep
+
+      # A container on two networks is discovered twice. Keeping only the shared one leaves
+      # exactly one target per container, and it is the network Prometheus can reach.
+      - source_labels: [__meta_docker_network_name]
+        regex: dokploy-network
+        action: keep
+
+      # The operational port: /metrics, /livez and /readyz answer there and it is not
+      # published to the internet.
+      - source_labels: [__meta_docker_network_ip]
+        target_label: __address__
+        replacement: $1:8080
+
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        target_label: service
+
+      - source_labels: [__meta_docker_container_label_com_docker_compose_project]
+        regex: dizen-v2-(.*)
+        target_label: environment
+        replacement: $1
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
