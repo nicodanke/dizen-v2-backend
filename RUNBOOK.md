@@ -210,6 +210,16 @@ docker exec dizen-v2-rabbitmq-<env> rabbitmqctl change_password dizen '<value>'
 Nothing is lost by resetting the volume: the exchange, queues, dead-letter queues and
 bindings are declared by the services at startup.
 
+**Grafana will not start, and the log says `Datasource provisioning error: data source not
+found`.** A provisioned datasource changed in a way Grafana cannot reconcile with what is
+already in its database -- most often a `uid` added to one that was created without it, so
+Grafana was assigning a random one. Provisioning failing takes the whole process down, so a
+working Grafana stops working over a config change.
+
+The datasource files carry `deleteDatasources` for exactly this: the old entry is removed by
+name before the new one is created, so the change converges instead of deadlocking. If it
+happens again with something else, the same trick applies.
+
 **A config file changed in the repository and the container ignores it.** Dokploy deletes
 and re-clones its `code/` directory on every deploy, and a bind mount is bound to the
 directory that existed when the container was created. Delete that directory and the

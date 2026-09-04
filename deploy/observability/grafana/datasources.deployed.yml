@@ -5,6 +5,19 @@
 # as generic as `prometheus` is not necessarily ours. The container names are.
 apiVersion: 1
 
+# `deleteDatasources` runs before the definitions below, and it is here because of what
+# happens without it: these datasources existed before they had a fixed uid, Grafana had
+# assigned each a random one, and adding a uid made provisioning fail with "data source not
+# found" -- which stops Grafana from starting at all, on an installation that was working.
+#
+# Deleting by name first makes the change converge on an existing volume instead of
+# deadlocking on it. It is idempotent: a fresh install deletes nothing.
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+  - name: Jaeger
+    orgId: 1
+
 datasources:
   - name: Prometheus
     type: prometheus
