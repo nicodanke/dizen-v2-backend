@@ -9,6 +9,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/nicodanke/dizen-v2-backend/pkg/jwt"
 	"github.com/nicodanke/dizen-v2-backend/pkg/logger"
 	"github.com/nicodanke/dizen-v2-backend/pkg/observability/metrics"
+	"github.com/nicodanke/dizen-v2-backend/pkg/observability/sentry"
 	"github.com/nicodanke/dizen-v2-backend/pkg/observability/tracing"
 	"github.com/nicodanke/dizen-v2-backend/pkg/outbox"
 	"github.com/nicodanke/dizen-v2-backend/pkg/version"
@@ -80,15 +82,32 @@ func run(ctx context.Context, envFile string, migrateOnly bool) error {
 		return err
 	}
 
+	build := version.Get()
+
+	// Before the logger, because the reporter is one of its writers: every log at error
+	// level or above becomes a Sentry event (PRD-24 RF-2). An empty DSN disables it.
+	reporter, err := sentry.Setup(sentry.Options{
+		DSN:         cfg.SentryDSN,
+		Environment: cfg.Environment.String(),
+		Release:     sentry.Release(cfg.ServiceName, build.Version, build.Commit),
+		ServiceName: cfg.ServiceName,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Flushed on the way out so the error that caused the shutdown is not the one that
+	// never arrives.
+	defer func() { _ = reporter.Close() }()
+
 	log := logger.New(logger.Options{
 		ServiceName: cfg.ServiceName,
 		Level:       cfg.LogLevel,
+		Extra:       []io.Writer{reporter.Writer()},
 		// Colored console on a developer machine, JSON everywhere else so Loki can
 		// parse it.
 		Pretty: cfg.Environment.IsLocal(),
 	})
-
-	build := version.Get()
 
 	log.Info().
 		Str("environment", cfg.Environment.String()).
@@ -108,7 +127,17 @@ func run(ctx context.Context, envFile string, migrateOnly bool) error {
 		return nil
 	}
 
-	return serve(ctx, cfg, log)
+	// Logged before it is returned, so the reporter sees it: main writes what run
+	// returns to stderr, and stderr is not a Sentry event. A service that dies on
+	// startup -- a dependency it cannot reach, a migration that will not apply -- is
+	// exactly the error worth being told about, and it was the one going unreported.
+	if err := serve(ctx, cfg, log); err != nil {
+		log.Error().Err(err).Msg("the service stopped with an error")
+
+		return err
+	}
+
+	return nil
 }
 
 // serve opens the dependencies, builds the transports and runs them.

@@ -1,0 +1,278 @@
+{
+  "uid": "dizen-service",
+  "title": "Dizen \u00b7 Service detail",
+  "description": "One service at a time, in detail. Start from the Overview and come here once you know which one.",
+  "tags": [
+    "dizen"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "dizen-prometheus"
+        },
+        "query": "label_values(up, environment)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "dizen-prometheus"
+        },
+        "query": "label_values(up{job=\"dizen-services\"}, service)",
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Requests per second, by method",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "sum by (method) (rate(dizen_grpc_requests_total{service=\"$service\", environment=~\"$environment\"}[5m]))",
+          "legendFormat": "{{method}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "title": "Responses by status code",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "sum by (code) (rate(dizen_grpc_requests_total{service=\"$service\", environment=~\"$environment\"}[5m]))",
+          "legendFormat": "{{code}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "OK included on purpose: an error rate is only readable next to the traffic it is a fraction of."
+    },
+    {
+      "id": 3,
+      "title": "Latency percentiles",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(dizen_grpc_request_duration_seconds_bucket{service=\"$service\", environment=~\"$environment\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(dizen_grpc_request_duration_seconds_bucket{service=\"$service\", environment=~\"$environment\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(dizen_grpc_request_duration_seconds_bucket{service=\"$service\", environment=~\"$environment\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "title": "Slowest methods, p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "topk(5, histogram_quantile(0.99, sum by (method, le) (rate(dizen_grpc_request_duration_seconds_bucket{service=\"$service\", environment=~\"$environment\"}[5m]))))",
+          "legendFormat": "{{method}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Where to look first: an overall p99 says something is slow, this says what."
+    },
+    {
+      "id": 5,
+      "title": "Requests in flight",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "sum by (method) (dizen_grpc_requests_in_flight{service=\"$service\", environment=~\"$environment\"})",
+          "legendFormat": "{{method}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Concurrency. A line that climbs and does not come down is work that is not finishing."
+    },
+    {
+      "id": 6,
+      "title": "Up",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "up{job=\"dizen-services\", service=\"$service\", environment=~\"$environment\"}",
+          "legendFormat": "{{environment}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "1 is answering, 0 is not. Alerts after two minutes at 0."
+    }
+  ]
+}

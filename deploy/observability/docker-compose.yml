@@ -22,6 +22,9 @@ volumes:
   prometheus-data:
   grafana-data:
   jaeger-data:
+  alertmanager-data:
+  # Holds the rendered config and the bot token. See alertmanager-init.
+  alertmanager-config:
 
 x-logging: &logging
   logging:
@@ -90,6 +93,7 @@ services:
 
     volumes:
       - ./prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
 
     depends_on:
@@ -171,6 +175,118 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Host metrics: disk, memory, load. The services report on themselves and know nothing
+  # about the machine underneath, and "disk over 80%" is one of the alerts RF-15 asks for --
+  # on a VPS that also carries the v1 stack, it is the one most likely to fire.
+  # ---------------------------------------------------------------------------
+  node-exporter:
+    <<: *logging
+    image: prom/node-exporter:v1.9.1
+    container_name: dizen-v2-node-exporter
+    restart: unless-stopped
+    networks: [dokploy-network]
+
+    command:
+      - --path.rootfs=/host
+      # Only the real filesystems. Without this every overlay layer of every container shows
+      # up as a filesystem about to fill, and the alert is noise from the first day.
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|host/var/lib/docker/.+)($$|/)
+      - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|cgroup.?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$$
+
+    pid: host
+
+    volumes:
+      # Read-only view of the host filesystem, which is what it measures.
+      - /:/host:ro,rslave
+
+    expose: ["9100"]
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 96M
+
+  # ---------------------------------------------------------------------------
+  # Probes the public hostnames from outside the services, which is the only way to see the
+  # certificate expiry RF-15 asks about: Traefik renews them and nothing in our code knows
+  # when they expire.
+  # ---------------------------------------------------------------------------
+  blackbox-exporter:
+    <<: *logging
+    image: prom/blackbox-exporter:v0.27.0
+    container_name: dizen-v2-blackbox
+    restart: unless-stopped
+    networks: [dokploy-network]
+
+    volumes:
+      - ./blackbox/config.yml:/etc/blackbox_exporter/config.yml:ro
+
+    expose: ["9115"]
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 96M
+
+  # ---------------------------------------------------------------------------
+  # Renders the Alertmanager config and writes the bot token to a file.
+  #
+  # Alertmanager does not expand environment variables in its config, and the token must not
+  # be committed. So the template travels in the repository with a placeholder, and this
+  # substitutes the chat id and writes the token where `bot_token_file` will read it.
+  # ---------------------------------------------------------------------------
+  alertmanager-init:
+    image: busybox:1.37
+    environment:
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN is required. Without it Alertmanager starts and every notification silently fails}"
+      # Quoted because the message contains a colon, which YAML would otherwise read as the
+      # start of a mapping.
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID is required: the chat the alerts are sent to}"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        mkdir -p /rendered/secrets
+        printf '%s' "$$TELEGRAM_BOT_TOKEN" > /rendered/secrets/telegram-token
+        sed "s|__CHAT_ID__|$$TELEGRAM_CHAT_ID|" /template/alertmanager.yml > /rendered/alertmanager.yml
+        chmod 600 /rendered/secrets/telegram-token
+        chown -R 65534:65534 /rendered
+    volumes:
+      - ./alertmanager:/template:ro
+      - alertmanager-config:/rendered
+
+  alertmanager:
+    <<: *logging
+    image: prom/alertmanager:v0.28.1
+    container_name: dizen-v2-alertmanager
+    restart: unless-stopped
+    networks: [dokploy-network]
+
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+
+    volumes:
+      - alertmanager-config:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+
+    depends_on:
+      alertmanager-init:
+        condition: service_completed_successfully
+
+    # Not published: it has no authentication either. Alerts leave by Telegram.
+    expose: ["9093"]
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
 
   # ---------------------------------------------------------------------------
   # The only thing published, and the only one with a login.

@@ -1,0 +1,470 @@
+{
+  "uid": "dizen-overview",
+  "title": "Dizen \u00b7 Overview",
+  "description": "Is everything all right? One stack watches both environments (D-46), so every panel filters on the environment variable.",
+  "tags": [
+    "dizen"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "dizen-prometheus"
+        },
+        "query": "label_values(up, environment)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Services up",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "sum(up{job=\"dizen-services\", environment=~\"$environment\"})",
+          "legendFormat": "up",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "description": "Five per environment. Anything less is a service that is not answering."
+    },
+    {
+      "id": 2,
+      "title": "Error rate",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "sum(rate(dizen_grpc_requests_total{code=~\"Internal|Unknown|Unavailable|DataLoss\", environment=~\"$environment\"}[5m])) / sum(rate(dizen_grpc_requests_total{environment=~\"$environment\"}[5m]))",
+          "legendFormat": "errors",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "description": "gRPC status codes, which is where the status lives: REST arrives through grpc-gateway and lands in the same handlers. Alerts at 5%."
+    },
+    {
+      "id": 3,
+      "title": "p99 latency",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(dizen_grpc_request_duration_seconds_bucket{environment=~\"$environment\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "description": "Alerts at 2s."
+    },
+    {
+      "id": 4,
+      "title": "Dead-lettered",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "sum(rabbitmq_queue_messages{queue=~\".+\\\\.dlq\", environment=~\"$environment\"})",
+          "legendFormat": "dlq",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "description": "Messages that failed every retry. Any depth here is a bug that already happened; alerts at 10."
+    },
+    {
+      "id": 5,
+      "title": "Requests per second, by service",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "sum by (service, environment) (rate(dizen_grpc_requests_total{environment=~\"$environment\"}[5m]))",
+          "legendFormat": "{{service}} \u00b7 {{environment}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "title": "Error rate, by service",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "sum by (service, environment) (rate(dizen_grpc_requests_total{code=~\"Internal|Unknown|Unavailable|DataLoss\", environment=~\"$environment\"}[5m])) / sum by (service, environment) (rate(dizen_grpc_requests_total{environment=~\"$environment\"}[5m]))",
+          "legendFormat": "{{service}} \u00b7 {{environment}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 7,
+      "title": "p99 latency, by service",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (service, environment, le) (rate(dizen_grpc_request_duration_seconds_bucket{environment=~\"$environment\"}[5m])))",
+          "legendFormat": "{{service}} \u00b7 {{environment}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 8,
+      "title": "Queue depth",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "rabbitmq_queue_messages{environment=~\"$environment\"} > 0",
+          "legendFormat": "{{queue}} \u00b7 {{environment}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Ready plus unacknowledged. A queue that grows and does not drain is a consumer that stopped keeping up."
+    },
+    {
+      "id": 9,
+      "title": "Disk used",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "100 - (node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\"} * 100)",
+          "legendFormat": "{{mountpoint}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "The host, shared with the v1 stack. Alerts at 80%."
+    },
+    {
+      "id": 10,
+      "title": "Days until certificates expire",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dizen-prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dizen-prometheus"
+          },
+          "expr": "(probe_ssl_earliest_cert_expiry - time()) / 86400",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "d"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Traefik renews at 30 remaining. A line trending to zero means renewal is failing; alerts at 14."
+    }
+  ]
+}

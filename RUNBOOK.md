@@ -151,6 +151,25 @@ every metric carries an `environment` label -- filter on it before reading anyth
 Metrics are kept 15 days, traces 7. Logs are not aggregated (D-46): read them per container
 in Dokploy, or on the VPS.
 
+Two dashboards come provisioned, in the Dizen folder. **Overview** answers "is everything
+all right" -- services up, error rate, p99, dead-lettered messages, queue depth, disk and
+certificate expiry. **Service detail** is where to go once you know which service: traffic
+by method, status codes, latency percentiles, the slowest methods, and requests in flight.
+Both have an environment selector at the top, so the same panel serves staging and
+production.
+
+**Alerts arrive on Telegram**, on the same bot the release workflow uses. Ten rules, in
+`deploy/observability/prometheus/alerts.yml`: a service not answering, a service that has
+disappeared, the broker down, error rate over 5%, p99 over 2s, a dead-letter queue over ten
+messages, disk over 80% and 90%, and a certificate inside 14 days of expiry.
+
+Each message is one line per alert -- what broke, where, and why -- and no explanation. The
+explanation is this document, which is where you go next anyway.
+
+A stopped container is the second of those, not the first: targets come from Docker, so it
+leaves discovery rather than reporting itself down. Staging alerts repeat once a day rather than every
+four hours -- they are worth knowing about, not worth being woken by.
+
 Direct, without Grafana:
 
 ```bash
@@ -193,6 +212,31 @@ docker exec dizen-v2-rabbitmq-<env> rabbitmqctl change_password dizen '<value>'
 
 Nothing is lost by resetting the volume: the exchange, queues, dead-letter queues and
 bindings are declared by the services at startup.
+
+**Grafana will not start, and the log says `Datasource provisioning error: data source not
+found`.** A provisioned datasource changed in a way Grafana cannot reconcile with what is
+already in its database -- most often a `uid` added to one that was created without it, so
+Grafana was assigning a random one. Provisioning failing takes the whole process down, so a
+working Grafana stops working over a config change.
+
+The datasource files carry `deleteDatasources` for exactly this: the old entry is removed by
+name before the new one is created, so the change converges instead of deadlocking. If it
+happens again with something else, the same trick applies.
+
+**A config file changed in the repository and the container ignores it.** Dokploy deletes
+and re-clones its `code/` directory on every deploy, and a bind mount is bound to the
+directory that existed when the container was created. Delete that directory and the
+container keeps pointing at the old one, which is now gone -- so it sees an empty mount and
+says so in a way that sounds like the file is missing from the repository.
+
+It only happens to containers Compose did not recreate, which are exactly the ones whose
+own definition did not change: edit a mounted file and nothing about the service block
+changes, so Compose leaves it alone. `docker restart` does not help either -- the mount is
+the same. Recreate it:
+
+```bash
+docker rm -f dizen-v2-grafana     # then deploy again from Dokploy
+```
 
 **The deployed version does not change.** `docker compose up` will not re-pull a moving tag
 on its own; `pull_policy: always` is what makes it. If the version still lags, check whether
