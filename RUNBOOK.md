@@ -163,6 +163,9 @@ production.
 disappeared, the broker down, error rate over 5%, p99 over 2s, a dead-letter queue over ten
 messages, disk over 80% and 90%, and a certificate inside 14 days of expiry.
 
+Each message is one line per alert -- what broke, where, and why -- and no explanation. The
+explanation is this document, which is where you go next anyway.
+
 A stopped container is the second of those, not the first: targets come from Docker, so it
 leaves discovery rather than reporting itself down. Staging alerts repeat once a day rather than every
 four hours -- they are worth knowing about, not worth being woken by.

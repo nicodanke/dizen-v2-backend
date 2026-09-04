@@ -25,48 +25,21 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: '{{ $labels.service }} is not answering in {{ $labels.environment }}'
-          description: >-
-            Its container is running but it has not answered a scrape for two minutes. A
-            migration failing at startup keeps it from ever becoming ready.
-
-      # Gone entirely, which the rule above cannot see.
-      #
-      # Targets come from Docker, so a stopped or deleted container does not report up=0 --
-      # it disappears from discovery, and a series that no longer exists never equals zero.
-      # Verified by stopping one: the series vanished within a refresh.
-      #
-      # `max_over_time` keeps a series alive for an hour after its last sample, so `unless`
-      # leaves exactly the ones that were here and are not, with their labels intact. It
-      # needs no list of expected services, so adding a sixth one needs no change here. A
-      # service removed on purpose alerts for an hour and then stops, which is the right
-      # trade for not having to maintain that list.
+          summary: '{{ $labels.service }} · {{ $labels.environment }} — running, not answering (2m)'
       - alert: ServiceMissing
         expr: max_over_time(up{job="dizen-services"}[1h]) unless up{job="dizen-services"}
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: '{{ $labels.service }} has disappeared from {{ $labels.environment }}'
-          description: >-
-            Its container is no longer running. If it was removed on purpose, this stops on
-            its own within the hour.
-
+          summary: '{{ $labels.service }} · {{ $labels.environment }} — container is gone'
       - alert: BrokerDown
         expr: up{job="rabbitmq"} == 0
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: 'RabbitMQ is unreachable in {{ $labels.environment }}'
-          description: 'Events are not being delivered, and publishers will be blocking on confirms.'
-
-  - name: latency-and-errors
-    interval: 30s
-    rules:
-      # RF-15 asks for "5xx rate above 5%". There is no HTTP metric to ask that of: REST
-      # arrives through grpc-gateway and lands in the same handlers, so the status that
-      # exists is the gRPC one. These codes are the ones a 5xx would have been.
+          summary: 'rabbitmq · {{ $labels.environment }} — unreachable, events not delivering'
       - alert: HighErrorRate
         expr: >-
           sum by (environment, service) (
@@ -79,8 +52,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: '{{ $labels.service }} is failing {{ $value | humanizePercentage }} of requests in {{ $labels.environment }}'
-
+          summary: '{{ $labels.service }} · {{ $labels.environment }} — {{ $value | humanizePercentage }} of requests failing'
       - alert: HighLatency
         expr: >-
           histogram_quantile(
@@ -91,29 +63,14 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: '{{ $labels.service }} p99 is {{ $value | humanizeDuration }} in {{ $labels.environment }}'
-          description: 'RF-15 sets the threshold at two seconds.'
-
-  - name: queues
-    interval: 30s
-    rules:
-      # RF-15: more than ten messages dead-lettered. A dead letter is a message that failed
-      # every retry, so any depth here is a bug that already happened; ten is where it stops
-      # being one bad message and starts being a pattern.
+          summary: '{{ $labels.service }} · {{ $labels.environment }} — p99 {{ $value | humanizeDuration }}, over 2s'
       - alert: DeadLetterQueueFilling
         expr: rabbitmq_queue_messages{queue=~".+\\.dlq"} > 10
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: '{{ $labels.queue }} holds {{ $value }} messages in {{ $labels.environment }}'
-          description: 'These failed every retry. Read one before purging: they say what broke.'
-
-  - name: host
-    interval: 1m
-    rules:
-      # RF-15: disk above 80%. The VPS carries the v1 stack as well as both v2 environments,
-      # so this is the alert most likely to matter.
+          summary: '{{ $labels.queue }} · {{ $labels.environment }} — {{ $value }} dead-lettered'
       - alert: DiskFilling
         expr: >-
           100 - (
@@ -124,9 +81,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: '{{ $labels.mountpoint }} is {{ $value | humanize }}% full'
-          description: 'Metrics, traces and container logs all have bounded retention; something else is growing.'
-
+          summary: 'disk {{ $labels.mountpoint }} — {{ $value | humanize }}% full'
       - alert: DiskCritical
         expr: >-
           100 - (
@@ -137,28 +92,18 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: '{{ $labels.mountpoint }} is {{ $value | humanize }}% full'
-
-  - name: certificates
-    interval: 5m
-    rules:
-      # RF-15: certificate about to expire. Let's Encrypt issues for 90 days and Traefik
-      # renews at 30 remaining, so 14 means renewal has been failing for two weeks -- long
-      # enough to be real, early enough to fix by hand.
+          summary: 'disk {{ $labels.mountpoint }} — {{ $value | humanize }}% full, critical'
       - alert: CertificateExpiringSoon
         expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
         for: 1h
         labels:
           severity: warning
         annotations:
-          summary: '{{ $labels.instance }} expires in {{ $value | humanize }} days'
-          description: 'Traefik renews at 30 days remaining, so this means renewal is failing.'
-
+          summary: '{{ $labels.instance }} — certificate expires in {{ $value | humanize }}d'
       - alert: CertificateProbeFailing
         expr: probe_success{job="certificates"} == 0
         for: 15m
         labels:
           severity: warning
         annotations:
-          summary: 'Cannot complete a TLS handshake with {{ $labels.instance }}'
-          description: 'Either the host is unreachable or its certificate is not being served.'
+          summary: '{{ $labels.instance }} — TLS handshake failing'

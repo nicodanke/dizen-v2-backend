@@ -26,12 +26,16 @@ receivers:
         chat_id: __CHAT_ID__
         parse_mode: HTML
         send_resolved: true
+        # One line per alert, and nothing else.
+        #
+        # The summaries carry the service, the environment and the cause, so repeating any
+        # of it here only makes the message longer. There is no description: an alert is
+        # read on a phone, usually at a bad moment, and what it has to answer is what broke
+        # and where. The explanation is in the runbook, which is where you go next anyway.
         message: |
-          {{ if eq .Status "firing" }}🔴{{ else }}✅{{ end }} <b>{{ .CommonLabels.alertname }}</b>{{ with .CommonLabels.environment }} · {{ . }}{{ end }}
-
+          {{ if eq .Status "firing" }}🔴{{ else }}✅{{ end }} <b>{{ .CommonLabels.alertname }}</b>
           {{ range .Alerts }}{{ .Annotations.summary }}
-          {{ with .Annotations.description }}{{ . }}
-          {{ end }}{{ end }}
+          {{ end }}
 
 inhibit_rules:
   # A service that is down will also look slow and error-prone on its way out. Only the
