@@ -1,0 +1,54 @@
+# Jaeger v2 (PRD-18 RF-14).
+#
+# v2 is an OpenTelemetry Collector distribution, so it is configured by this file rather
+# than by environment variables the way v1 was. Storage is badger on disk: a restart must
+# not lose the traces of the incident that caused it.
+
+service:
+  extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger_storage_exporter]
+
+extensions:
+  healthcheckv2:
+    use_v2: true
+    http:
+      endpoint: 0.0.0.0:13133
+
+  jaeger_storage:
+    backends:
+      main:
+        badger:
+          directories:
+            keys: /badger/key
+            values: /badger/data
+          ttl:
+            # Seven days of traces, as RF-14 asks. The PRD's risk table lists a full disk,
+            # and for traces this is what bounds it.
+            spans: 168h
+
+  jaeger_query:
+    storage:
+      traces: main
+    http:
+      endpoint: 0.0.0.0:16686
+    grpc:
+      endpoint: 0.0.0.0:16685
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: main
