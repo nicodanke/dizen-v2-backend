@@ -210,6 +210,21 @@ docker exec dizen-v2-rabbitmq-<env> rabbitmqctl change_password dizen '<value>'
 Nothing is lost by resetting the volume: the exchange, queues, dead-letter queues and
 bindings are declared by the services at startup.
 
+**A config file changed in the repository and the container ignores it.** Dokploy deletes
+and re-clones its `code/` directory on every deploy, and a bind mount is bound to the
+directory that existed when the container was created. Delete that directory and the
+container keeps pointing at the old one, which is now gone -- so it sees an empty mount and
+says so in a way that sounds like the file is missing from the repository.
+
+It only happens to containers Compose did not recreate, which are exactly the ones whose
+own definition did not change: edit a mounted file and nothing about the service block
+changes, so Compose leaves it alone. `docker restart` does not help either -- the mount is
+the same. Recreate it:
+
+```bash
+docker rm -f dizen-v2-grafana     # then deploy again from Dokploy
+```
+
 **The deployed version does not change.** `docker compose up` will not re-pull a moving tag
 on its own; `pull_policy: always` is what makes it. If the version still lags, check whether
 the pipeline reached its deploy job at all — a run that failed earlier publishes nothing.
